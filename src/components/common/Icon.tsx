@@ -1,0 +1,241 @@
+import React from 'react';
+import {
+  LayoutGrid,
+  PiggyBank,
+  Zap,
+  CreditCard,
+  Receipt,
+  ArrowLeft,
+  ArrowUp,
+  ArrowDown,
+  ArrowRight,
+  ArrowUpRight,
+  ArrowDownLeft,
+  ArrowLeftRight,
+  Landmark,
+  Wallet,
+  Headphones,
+  Bell,
+  ChevronDown,
+  ChevronRight,
+  ChevronLeft,
+  ChevronUp,
+  Eye,
+  EyeOff,
+  RefreshCw,
+  RotateCw,
+  RotateCcw,
+  TrendingUp,
+  Copy,
+  QrCode,
+  Scan,
+  MessageSquare,
+  Shield,
+  Fingerprint,
+  X,
+  Check,
+  CheckCircle2,
+  BadgeCheck,
+  AlertTriangle,
+  Info,
+  Lock,
+  LockOpen,
+  Search,
+  UserCheck,
+  Contact,
+  Gauge,
+  Radio,
+  Snowflake,
+  Send,
+  Download,
+  Share2,
+  Tv,
+  Wifi,
+  Smartphone,
+  Gamepad2,
+  Coins,
+  Home,
+  RadioTower,
+  Building2,
+  Users,
+  User,
+  Banknote,
+  PieChart,
+  LineChart,
+  Clock,
+  Hourglass,
+  Grid3X3,
+  GitFork,
+  Scale,
+  Plus,
+  Settings,
+  HelpCircle,
+  Sparkles,
+  ExternalLink,
+  Sliders,
+  FileText,
+  HandCoins,
+  Store,
+  Camera,
+  Image,
+  Sun,
+  Moon,
+  LucideProps,
+} from 'lucide-react';
+
+const ICON_MAP: Record<string, React.ComponentType<LucideProps>> = {
+  // Navigation & Core Tabs
+  grid_view: LayoutGrid,
+  savings: PiggyBank,
+  bolt: Zap,
+  electric_bolt: Zap,
+  credit_card: CreditCard,
+  add_card: CreditCard,
+  receipt_long: Receipt,
+  receipt: Receipt,
+
+  // Directional & Arrows
+  arrow_back: ArrowLeft,
+  arrow_forward: ArrowRight,
+  arrow_upward: ArrowUp,
+  arrow_downward: ArrowDown,
+  north_east: ArrowUpRight,
+  arrow_outward: ArrowUpRight,
+  south_west: ArrowDownLeft,
+  swap_horiz: ArrowLeftRight,
+  chevron_right: ChevronRight,
+  chevron_left: ChevronLeft,
+  chevron_up: ChevronUp,
+  chevron_down: ChevronDown,
+  expand_more: ChevronDown,
+
+  // Financial & Banking
+  account_balance: Landmark,
+  account_balance_wallet: Wallet,
+  wallet: Wallet,
+  payments: Banknote,
+  balance: Scale,
+  trending_up: TrendingUp,
+  insights: LineChart,
+  pie_chart: PieChart,
+
+  // Actions & Utilities
+  sync: RefreshCw,
+  refresh: RotateCw,
+  autorenew: RefreshCw,
+  replay: RotateCcw,
+  hourglass_top: Hourglass,
+  hourglass: Hourglass,
+  content_copy: Copy,
+  copy: Copy,
+  qr_code_2: QrCode,
+  qr_code: QrCode,
+  qr_code_scanner: Scan,
+  search: Search,
+  share: Share2,
+  download: Download,
+  send: Send,
+  add: Plus,
+  settings: Settings,
+  sliders: Sliders,
+  close: X,
+  check: Check,
+  check_circle: CheckCircle2,
+  verified: BadgeCheck,
+  verified_user: BadgeCheck,
+  warning: AlertTriangle,
+  info: Info,
+  help: HelpCircle,
+  visibility: Eye,
+  visibility_off: EyeOff,
+  lock: Lock,
+  lock_open: LockOpen,
+  support_agent: Headphones,
+  notifications: Bell,
+  chat: MessageSquare,
+  chat_bubble: MessageSquare,
+  shield: Shield,
+  fingerprint: Fingerprint,
+  contactless: Radio,
+  ac_unit: Snowflake,
+  dialpad: Grid3X3,
+  call_split: GitFork,
+  schedule: Clock,
+  sparkles: Sparkles,
+  open_in_new: ExternalLink,
+  file_text: FileText,
+  sun: Sun,
+  moon: Moon,
+  light_mode: Sun,
+  dark_mode: Moon,
+
+  // Peer & Proximity
+  hand_coins: HandCoins,
+  handcoins: HandCoins,
+  request_quote: HandCoins,
+  store: Store,
+  storefront: Store,
+  camera: Camera,
+  photo_camera: Camera,
+  image: Image,
+  photo_library: Image,
+
+  // Biller & Category Icons
+  tv: Tv,
+  wifi: Wifi,
+  sim_card: Smartphone,
+  smartphone: Smartphone,
+  phone_iphone: Smartphone,
+  contact_page: UserCheck,
+  contacts: Contact,
+  electric_meter: Gauge,
+  sports_esports: Gamepad2,
+  toll: Coins,
+  home: Home,
+  cell_tower: RadioTower,
+  apartment: Building2,
+  business: Building2,
+  domain: Building2,
+  group: Users,
+  groups: Users,
+  person: User,
+};
+
+export interface IconProps {
+  name: string;
+  className?: string;
+  size?: number | string;
+  style?: React.CSSProperties;
+  strokeWidth?: number;
+  fill?: boolean;
+}
+
+export const Icon: React.FC<IconProps> = ({
+  name,
+  className = '',
+  size = 20,
+  style,
+  strokeWidth = 2,
+  fill = false,
+}) => {
+  const normalizedKey = name.trim().toLowerCase().replace(/-/g, '_');
+  const Component = ICON_MAP[normalizedKey] || HelpCircle;
+
+  // Derive pixel size if passed as number or parse text-[Xpx] if possible
+  const computedSize = typeof size === 'number' ? size : parseInt(size, 10) || 20;
+
+  return (
+    <span
+      className={`inline-flex items-center justify-center shrink-0 leading-none ${className}`}
+      style={style}
+    >
+      <Component
+        size={computedSize}
+        strokeWidth={strokeWidth}
+        className={fill ? 'fill-current' : undefined}
+      />
+    </span>
+  );
+};
+
+export default Icon;

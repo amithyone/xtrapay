@@ -1,0 +1,6 @@
+{
+  "name": "Xtrapay",
+  "description": "Institutional mobile financial suite with real-time transaction processing, instant NIBSS settlement, smart savings, and bill payment routing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
