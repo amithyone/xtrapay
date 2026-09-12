@@ -33,7 +33,8 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
     activeScreen === 'ask_money' ||
     activeScreen === 'save_together' ||
     activeScreen === 'terminals' ||
-    activeScreen === 'xpoints';
+    activeScreen === 'xpoints' ||
+    activeScreen === 'profile';
 
   if (isSubScreen) {
     let screenTitle = title;
@@ -45,6 +46,7 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
       else if (activeScreen === 'save_together') screenTitle = 'Group savings';
       else if (activeScreen === 'terminals') screenTitle = 'Terminal Management';
       else if (activeScreen === 'xpoints') screenTitle = 'X-Points';
+      else if (activeScreen === 'profile') screenTitle = 'Profile & Settings';
       else if (activeScreen === 'history') screenTitle = 'Transaction History';
     }
 
@@ -197,7 +199,7 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
           {/* Profile Avatar */}
           <button
             aria-label="Profile Account"
-            onClick={() => showToast('Profile', 'Logged in as Innocent Solomon (JD) • Tier 3', 'info')}
+            onClick={() => setActiveScreen('profile')}
             className="frosted-pad !h-7 !w-7 !min-h-7 !min-w-7 !rounded-full text-[var(--accent)] text-xs font-semibold cursor-pointer"
             type="button"
           >

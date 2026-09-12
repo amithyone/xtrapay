@@ -16,6 +16,7 @@ import { AskMoneyScreen } from './components/screens/AskMoneyScreen';
 import { SaveTogetherScreen } from './components/screens/SaveTogetherScreen';
 import { TerminalScreen } from './components/screens/TerminalScreen';
 import { XPointsScreen } from './components/screens/XPointsScreen';
+import { ProfileScreen } from './components/screens/ProfileScreen';
 import { TransferSuccessModal } from './components/modals/TransferSuccessModal';
 import { QrModal } from './components/modals/QrModal';
 import { ShareModal } from './components/modals/ShareModal';
@@ -60,6 +61,8 @@ const AppContent: React.FC = () => {
         return <TerminalScreen />;
       case 'xpoints':
         return <XPointsScreen />;
+      case 'profile':
+        return <ProfileScreen />;
       default:
         return USE_LEGACY_HUB ? <HubScreenLegacy /> : <HubScreen />;
     }

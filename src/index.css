@@ -183,6 +183,19 @@ button:active:not(:disabled),
   transform: scale(0.985) translateY(1px) !important;
 }
 
+/* Settings lists / toggles — no squash on tap (breaks row + switch layout) */
+.glass-card.settings-list:active,
+.apple-glass-card.settings-list:active {
+  transform: none !important;
+}
+
+button.settings-row:active,
+button[role="switch"]:active,
+.settings-chip:active {
+  transform: none !important;
+  filter: none !important;
+}
+
 .material-symbols-outlined {
   font-family: 'Material Symbols Outlined';
   font-weight: normal;

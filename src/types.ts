@@ -10,7 +10,8 @@ export type ScreenType =
   | 'ask_money'
   | 'save_together'
   | 'terminals'
-  | 'xpoints';
+  | 'xpoints'
+  | 'profile';
 
 export type AccountContext = 'personal' | 'business';
 
