@@ -2,7 +2,9 @@ import React from 'react';
 import { TransactionProvider, useTransactions } from './context/TransactionContext';
 import { TopAppBar } from './components/TopAppBar';
 import { BottomNavBar } from './components/BottomNavBar';
+import { BottomNavBarLegacy } from './components/BottomNavBar.legacy';
 import { HubScreen } from './components/screens/HubScreen';
+import { HubScreen as HubScreenLegacy } from './components/screens/HubScreen.legacy';
 import { SavingScreen } from './components/screens/SavingScreen';
 import { UtilityScreen } from './components/screens/UtilityScreen';
 import { DollarCardScreen } from './components/screens/DollarCardScreen';
@@ -22,13 +24,18 @@ import { ScanToPayModal } from './components/modals/ScanToPayModal';
 import { BackgroundDepthPattern } from './components/BackgroundDepthPattern';
 import { Icon } from './components/Icon';
 
+/** Flip to true to restore the previous bottom nav */
+const USE_LEGACY_BOTTOM_NAV = false;
+/** Flip to true to restore the previous Hub layout */
+const USE_LEGACY_HUB = false;
+
 const AppContent: React.FC = () => {
-  const { activeScreen, toast, theme } = useTransactions();
+  const { activeScreen, toast, theme, dismissToast } = useTransactions();
 
   const renderScreen = () => {
     switch (activeScreen) {
       case 'hub':
-        return <HubScreen />;
+        return USE_LEGACY_HUB ? <HubScreenLegacy /> : <HubScreen />;
       case 'saving':
         return <SavingScreen />;
       case 'save_together':
@@ -48,7 +55,7 @@ const AppContent: React.FC = () => {
       case 'paybills':
         return <PayBillsScreen />;
       default:
-        return <HubScreen />;
+        return USE_LEGACY_HUB ? <HubScreenLegacy /> : <HubScreen />;
     }
   };
 
@@ -74,8 +81,8 @@ const AppContent: React.FC = () => {
           {renderScreen()}
         </div>
 
-        {/* Persistent Bottom Navigation */}
-        <BottomNavBar />
+        {/* Persistent Bottom Navigation — toggle USE_LEGACY_BOTTOM_NAV to rollback */}
+        {USE_LEGACY_BOTTOM_NAV ? <BottomNavBarLegacy /> : <BottomNavBar />}
 
         {/* Modals & Sheets */}
         <TransferSuccessModal />
@@ -86,35 +93,65 @@ const AppContent: React.FC = () => {
         <PayAtShopModal />
         <ScanToPayModal />
 
-        {/* Live Floating Toast Notification */}
+        {/* Live Floating Toast — compact frosted chip + close */}
         {toast && (
-          <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[90] pointer-events-none transition-all duration-300">
+          <div
+            className="fixed top-3 left-0 right-0 z-[90] flex justify-center px-5 pointer-events-none"
+            role="status"
+            aria-live="polite"
+          >
             <div
-              className={`px-4 py-2.5 rounded-xl shadow-2xl border flex items-center gap-2.5 backdrop-blur-md ${
-                toast.type === 'success'
-                  ? 'bg-[#00a572]/90 border-[#4edea3]/40 text-white'
-                  : toast.type === 'warning'
-                  ? 'bg-[#bc7000]/90 border-[#ffb4ab]/40 text-white'
-                  : theme === 'light'
-                  ? 'bg-white/90 border-red-500/30 text-slate-900 shadow-red-500/10'
-                  : 'bg-[#1c2028]/95 border-[#c0c1ff]/40 text-[#dfe2ee]'
+              className={`app-toast pointer-events-auto flex w-auto max-w-[min(20rem,calc(100%-2.5rem))] items-center gap-2 rounded-2xl px-2.5 py-2 border backdrop-blur-[18px] ${
+                theme === 'light' ? 'app-toast--light' : 'app-toast--dark'
               }`}
+              data-toast-type={toast.type}
             >
-              <Icon
-                name={
+              <span
+                className={`app-toast-icon flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${
                   toast.type === 'success'
-                    ? 'check_circle'
+                    ? theme === 'light'
+                      ? 'bg-emerald-500/15 text-emerald-600'
+                      : 'bg-emerald-500/20 text-emerald-300'
                     : toast.type === 'warning'
-                    ? 'warning'
-                    : 'info'
-                }
-                size={18}
-                className={theme === 'light' && toast.type === 'info' ? 'text-red-600' : ''}
-              />
-              <div className="text-xs text-left">
-                <p className="font-semibold leading-tight">{toast.title}</p>
-                <p className="text-[11px] opacity-90 leading-tight">{toast.message}</p>
+                    ? theme === 'light'
+                      ? 'bg-amber-500/15 text-amber-600'
+                      : 'bg-amber-500/20 text-amber-300'
+                    : theme === 'light'
+                    ? 'bg-[var(--accent)]/15 text-[var(--accent)]'
+                    : 'bg-white/12 text-white'
+                }`}
+              >
+                <Icon
+                  name={
+                    toast.type === 'success'
+                      ? 'check_circle'
+                      : toast.type === 'warning'
+                      ? 'warning'
+                      : 'info'
+                  }
+                  size={15}
+                />
+              </span>
+              <div className="min-w-0 flex-1 text-left pr-0.5">
+                <p className="text-[12px] font-semibold leading-tight tracking-tight truncate">
+                  {toast.title}
+                </p>
+                <p className="mt-0.5 text-[10px] leading-snug opacity-75 line-clamp-2">
+                  {toast.message}
+                </p>
               </div>
+              <button
+                type="button"
+                aria-label="Close notification"
+                onClick={dismissToast}
+                className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full active:scale-95 transition-transform ${
+                  theme === 'light'
+                    ? 'bg-black/5 text-zinc-500 hover:bg-black/10'
+                    : 'bg-white/10 text-white/80 hover:bg-white/16'
+                }`}
+              >
+                <Icon name="close" size={14} />
+              </button>
             </div>
           </div>
         )}

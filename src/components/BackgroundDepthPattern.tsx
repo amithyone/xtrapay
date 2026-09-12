@@ -2,50 +2,69 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useTransactions } from '../context/TransactionContext';
 
 /**
- * Soft 3D atmosphere — CheckoutNow-style maroon pebbles on both themes.
- * Dark: deep burgundy night. Light: warm canvas + maroon slabs.
+ * Soft 3D atmosphere.
+ * Dark: glow orbs + frosted glass pebbles on top (extra depth).
+ * Light: warm canvas + silver / steel slabs (unchanged).
  */
 
 const SLIDE_MS = 1100;
 const THEME_FADE_MS = 520;
-const BLOB_OPACITY_DARK = 0.85;
+const BLOB_OPACITY_DARK = 0.95;
 const BLOB_OPACITY_LIGHT = 0.9;
+const PEBBLE_OPACITY = 0.78;
 const DRIFT_SCALE = 0.16;
 
 const OCEAN = {
   dark: {
-    // Deep maroon night — close to CheckoutNow hub
-    base: ['#1a0508', '#2a0a10', '#120406'] as const,
+    /* black-weighted maroon night */
+    base: ['#0a0203', '#120406', '#000000'] as const,
     colors: [
-      'rgba(127, 29, 29, 0.72)',   // deep maroon
-      'rgba(153, 27, 27, 0.58)',   // pepper
-      'rgba(136, 19, 55, 0.55)',   // wine
-      'rgba(90, 20, 30, 0.65)',    // oxblood
-      'rgba(185, 28, 28, 0.48)',   // rich red
-      'rgba(110, 20, 40, 0.60)',   // dark wine
-      'rgba(159, 18, 57, 0.45)',   // rose maroon
-      'rgba(69, 10, 20, 0.70)',    // near-black maroon
-      'rgba(145, 30, 45, 0.52)',   // brick
+      'rgba(233, 69, 96, 0.42)',   // rose glow (soft)
+      'rgba(127, 29, 29, 0.55)',   // maroon 55%
+      'rgba(0, 0, 0, 0.40)',       // black depth
+      'rgba(136, 19, 55, 0.45)',   // wine
+      'rgba(90, 20, 30, 0.50)',    // oxblood
+      'rgba(255, 255, 255, 0.05)', // white 5% sparkle
     ] as const,
   },
   light: {
-    // Soft warm canvas + higher-contrast silver / steel pebbles
     base: ['#f3f2f1', '#ebe9e7', '#f7f6f5'] as const,
     colors: [
-      'rgba(255, 255, 255, 0.95)',  // bright white
-      'rgba(113, 113, 122, 0.42)',  // zinc contrast
-      'rgba(82, 82, 91, 0.38)',     // deep silver
-      'rgba(228, 228, 231, 0.90)',  // light silver
-      'rgba(100, 116, 139, 0.40)',  // slate steel
-      'rgba(255, 255, 255, 0.88)',  // white
-      'rgba(71, 85, 105, 0.36)',    // steel
-      'rgba(161, 161, 170, 0.55)',  // mid silver
-      'rgba(51, 65, 85, 0.32)',     // charcoal silver edge
+      'rgba(255, 255, 255, 0.95)',
+      'rgba(113, 113, 122, 0.42)',
+      'rgba(82, 82, 91, 0.38)',
+      'rgba(228, 228, 231, 0.90)',
+      'rgba(100, 116, 139, 0.40)',
+      'rgba(255, 255, 255, 0.88)',
+      'rgba(71, 85, 105, 0.36)',
+      'rgba(161, 161, 170, 0.55)',
+      'rgba(51, 65, 85, 0.32)',
     ] as const,
   },
 };
 
-/** Rounded rectangle / cube slabs (both themes) */
+/** Soft circular glow orbs — dark theme only (reference atmosphere) */
+const ORB_SPECS = [
+  { size: 0.95, top: -0.18, left: -0.35, blur: 48 },
+  { size: 0.78, top: 0.08, left: 0.42, blur: 56 },
+  { size: 0.70, top: 0.38, left: -0.28, blur: 44 },
+  { size: 0.88, top: 0.52, left: 0.28, blur: 60 },
+  { size: 0.62, top: 0.72, left: -0.12, blur: 40 },
+  { size: 0.74, top: 0.82, left: 0.38, blur: 52 },
+] as const;
+
+/**
+ * Frosted glass pebbles sit ABOVE the glow orbs (dark only).
+ * Sparse — continuous slow float + tab-switch drift on parent.
+ */
+const GLASS_PEBBLE_SPECS = [
+  { w: 0.52, h: 0.24, top: 0.06, left: -0.12, rotate: -14, radius: 42 },
+  { w: 0.40, h: 0.32, top: 0.36, left: 0.52, rotate: 16, radius: 34 },
+  { w: 0.46, h: 0.22, top: 0.68, left: 0.04, rotate: -10, radius: 36 },
+  { w: 0.36, h: 0.28, top: 0.82, left: 0.48, rotate: 12, radius: 30 },
+] as const;
+
+/** Rounded rectangle / cube slabs (light theme) */
 const SLAB_SPECS = [
   { w: 0.72, h: 0.38, top: -0.04, left: -0.18, angle: '125deg', rotate: -18, radius: 48 },
   { w: 0.48, h: 0.55, top: 0.06, left: 0.52, angle: '210deg', rotate: 22, radius: 40 },
@@ -68,9 +87,57 @@ type BlobLayout = {
   shape: 'circle' | 'rect';
   rotate: number;
   radius: number;
+  blur: number;
+};
+
+type GlassPebbleLayout = {
+  width: number;
+  height: number;
+  top: number;
+  left: number;
+  rotate: number;
+  radius: number;
+  driftMul: number;
 };
 
 type Drift = { x: number; y: number; scale: number };
+
+function buildGlowOrbs(
+  frameW: number,
+  frameH: number,
+  colors: readonly string[]
+): BlobLayout[] {
+  const size = Math.max(frameW, frameH);
+  return ORB_SPECS.map((spec, i) => {
+    const color = colors[i % colors.length];
+    const dim = size * spec.size;
+    return {
+      width: dim,
+      height: dim,
+      top: frameH * spec.top,
+      left: frameW * spec.left,
+      gradient: `radial-gradient(circle at 40% 40%, ${color} 0%, transparent 68%)`,
+      driftMul: i % 2 === 0 ? 1.2 : 1,
+      shape: 'circle' as const,
+      rotate: 0,
+      radius: 9999,
+      blur: spec.blur,
+    };
+  });
+}
+
+function buildGlassPebbles(frameW: number, frameH: number): GlassPebbleLayout[] {
+  const size = Math.max(frameW, frameH);
+  return GLASS_PEBBLE_SPECS.map((spec, i) => ({
+    width: size * spec.w,
+    height: size * spec.h,
+    top: frameH * spec.top,
+    left: frameW * spec.left,
+    rotate: spec.rotate,
+    radius: spec.radius,
+    driftMul: i % 2 === 0 ? 0.85 : 1.1,
+  }));
+}
 
 function buildSlabBlobs(
   frameW: number,
@@ -90,6 +157,7 @@ function buildSlabBlobs(
       shape: 'rect' as const,
       rotate: spec.rotate,
       radius: spec.radius,
+      blur: 0,
     };
   });
 }
@@ -100,12 +168,16 @@ function AtmosphereLayer({
   drifts,
   motionKey,
   blobOpacity,
+  pebbles,
+  pebbleDrifts,
 }: {
   base: readonly [string, string, string];
   blobs: BlobLayout[];
   drifts: Drift[];
   motionKey: string;
   blobOpacity: number;
+  pebbles?: GlassPebbleLayout[];
+  pebbleDrifts?: Drift[];
 }) {
   return (
     <div className="absolute inset-0 overflow-hidden" aria-hidden="true">
@@ -115,25 +187,71 @@ function AtmosphereLayer({
           background: `linear-gradient(180deg, ${base[0]} 0%, ${base[1]} 50%, ${base[2]} 100%)`,
         }}
       />
+
+      {/* Layer 1 — soft glow orbs / slabs */}
       {blobs.map((blob, i) => {
         const d = drifts[i] ?? { x: 0, y: 0, scale: 1 };
+        const floatClass = `animate-orb-drift-${(i % 4) + 1}`;
         return (
           <div
-            key={`${motionKey}-${i}`}
-            className="absolute overflow-hidden"
+            key={`glow-${i}`}
+            className="absolute"
             style={{
               width: blob.width,
               height: blob.height,
               top: blob.top,
               left: blob.left,
               opacity: blobOpacity,
-              borderRadius: blob.shape === 'circle' ? '9999px' : `${blob.radius}px`,
               transform: `translate3d(${d.x}px, ${d.y}px, 0) scale(${d.scale}) rotate(${blob.rotate}deg)`,
               transition: `transform ${SLIDE_MS}ms cubic-bezier(0.4, 0, 0.2, 1)`,
               willChange: 'transform',
             }}
           >
-            <div className="absolute inset-0" style={{ background: blob.gradient }} />
+            <div
+              className={`absolute inset-0 overflow-hidden ${floatClass}`}
+              style={{
+                borderRadius: blob.shape === 'circle' ? '9999px' : `${blob.radius}px`,
+                filter: blob.blur > 0 ? `blur(${blob.blur}px)` : undefined,
+              }}
+            >
+              <div className="absolute inset-0" style={{ background: blob.gradient }} />
+            </div>
+          </div>
+        );
+      })}
+
+      {/* Layer 2 — sparse white frost pebbles; forever-float on child */}
+      {pebbles?.map((pebble, i) => {
+        const d = pebbleDrifts?.[i] ?? { x: 0, y: 0, scale: 1 };
+        const floatClass = `animate-pebble-float-${(i % 4) + 1}`;
+        return (
+          <div
+            key={`pebble-${i}`}
+            className="absolute"
+            style={{
+              width: pebble.width,
+              height: pebble.height,
+              top: pebble.top,
+              left: pebble.left,
+              opacity: PEBBLE_OPACITY,
+              transform: `translate3d(${d.x}px, ${d.y}px, 0) scale(${d.scale}) rotate(${pebble.rotate}deg)`,
+              transition: `transform ${SLIDE_MS}ms cubic-bezier(0.4, 0, 0.2, 1)`,
+              willChange: 'transform',
+            }}
+          >
+            <div
+              className={`absolute inset-0 ${floatClass}`}
+              style={{
+                borderRadius: `${pebble.radius}px`,
+                background:
+                  'linear-gradient(145deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.06) 45%, rgba(255,255,255,0.03) 100%)',
+                border: '1px solid rgba(255, 255, 255, 0.18)',
+                boxShadow:
+                  'inset 0 1px 0 rgba(255,255,255,0.22), inset 0 -1px 0 rgba(0,0,0,0.12), 0 10px 24px rgba(0,0,0,0.18)',
+                backdropFilter: 'blur(18px) saturate(150%)',
+                WebkitBackdropFilter: 'blur(18px) saturate(150%)',
+              }}
+            />
           </div>
         );
       })}
@@ -148,7 +266,10 @@ export const BackgroundDepthPattern: React.FC = () => {
   const rootRef = useRef<HTMLDivElement>(null);
   const [frame, setFrame] = useState({ w: 390, h: 844 });
   const [drifts, setDrifts] = useState<Drift[]>(() =>
-    SLAB_SPECS.map(() => ({ x: 0, y: 0, scale: 1 }))
+    ORB_SPECS.map(() => ({ x: 0, y: 0, scale: 1 }))
+  );
+  const [pebbleDrifts, setPebbleDrifts] = useState<Drift[]>(() =>
+    GLASS_PEBBLE_SPECS.map(() => ({ x: 0, y: 0, scale: 1 }))
   );
   const [themeFade, setThemeFade] = useState(isLight ? 1 : 0);
   const mountedTheme = useRef(false);
@@ -181,9 +302,10 @@ export const BackgroundDepthPattern: React.FC = () => {
   const motionKey = `${activeScreen}-ocean`;
   useEffect(() => {
     const size = Math.max(frame.w, frame.h);
+    const count = isLight ? SLAB_SPECS.length : ORB_SPECS.length;
     setDrifts(
-      SLAB_SPECS.map((spec, i) => {
-        const spread = size * Math.max(spec.w, spec.h) * DRIFT_SCALE * (i % 3 === 0 ? 1.2 : 1);
+      Array.from({ length: count }, (_, i) => {
+        const spread = size * 0.22 * DRIFT_SCALE * (i % 3 === 0 ? 1.25 : 1) * 8;
         return {
           x: (Math.random() - 0.5) * spread,
           y: (Math.random() - 0.5) * spread,
@@ -191,10 +313,25 @@ export const BackgroundDepthPattern: React.FC = () => {
         };
       })
     );
-  }, [motionKey, frame.w, frame.h]);
+    /* Pebbles drift on a slightly different plane (parallax depth) */
+    setPebbleDrifts(
+      GLASS_PEBBLE_SPECS.map((spec, i) => {
+        const spread = size * Math.max(spec.w, spec.h) * DRIFT_SCALE * 5.5 * (i % 2 === 0 ? 0.9 : 1.15);
+        return {
+          x: (Math.random() - 0.5) * spread,
+          y: (Math.random() - 0.5) * spread,
+          scale: 0.96 + Math.random() * 0.08,
+        };
+      })
+    );
+  }, [motionKey, frame.w, frame.h, isLight]);
 
   const darkBlobs = useMemo(
-    () => buildSlabBlobs(frame.w, frame.h, OCEAN.dark.colors),
+    () => buildGlowOrbs(frame.w, frame.h, OCEAN.dark.colors),
+    [frame.w, frame.h]
+  );
+  const darkPebbles = useMemo(
+    () => buildGlassPebbles(frame.w, frame.h),
     [frame.w, frame.h]
   );
   const lightBlobs = useMemo(
@@ -223,6 +360,8 @@ export const BackgroundDepthPattern: React.FC = () => {
           drifts={drifts}
           motionKey={`${motionKey}-dark`}
           blobOpacity={BLOB_OPACITY_DARK}
+          pebbles={darkPebbles}
+          pebbleDrifts={pebbleDrifts}
         />
       </div>
       <div

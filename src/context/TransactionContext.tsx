@@ -142,6 +142,7 @@ interface TransactionContextType {
   setIsSimulateOpen: (open: boolean) => void;
   toast: ToastInfo | null;
   showToast: (title: string, message: string, type?: 'success' | 'info' | 'warning') => void;
+  dismissToast: () => void;
 
   // Theme (Dark / Light with Red Primary Accent)
   theme: 'dark' | 'light';
@@ -310,6 +311,8 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
     setToast({ id, title, message, type });
     playChime('pop');
   };
+
+  const dismissToast = () => setToast(null);
 
   useEffect(() => {
     if (toast) {
@@ -1013,6 +1016,7 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
         setIsSimulateOpen,
         toast,
         showToast,
+        dismissToast,
         theme,
         toggleTheme,
         setTheme,

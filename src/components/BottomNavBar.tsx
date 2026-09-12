@@ -3,8 +3,14 @@ import { ScreenType } from '../types';
 import { useTransactions } from '../context/TransactionContext';
 import { Icon } from './Icon';
 
+/**
+ * Circle-active bottom nav (reference: crypto-wallet style).
+ * Rollback: set USE_LEGACY_BOTTOM_NAV = true in App.tsx
+ * Legacy file: BottomNavBar.legacy.tsx
+ */
 export const BottomNavBar: React.FC = () => {
   const { activeScreen, setActiveScreen, theme } = useTransactions();
+  const isLight = theme === 'light';
 
   const tabs: {
     id: ScreenType;
@@ -47,71 +53,61 @@ export const BottomNavBar: React.FC = () => {
   return (
     <nav
       aria-label="Bottom Navigation"
-      className="fixed bottom-0 left-0 right-0 z-50 w-full max-w-md mx-auto pb-safe transition-all"
+      className="fixed bottom-0 left-0 right-0 z-50 w-full max-w-md mx-auto pb-safe"
       id="bottom-navigation-bar"
+      data-nav-style="circle-active"
     >
-      <div className="grid grid-cols-5 w-full h-16 px-1">
-        {tabs.map(tab => {
-          const isActive = tab.matchScreens
-            ? tab.matchScreens.includes(activeScreen)
-            : activeScreen === tab.id;
+      <div className="mx-3 mb-2 rounded-[28px] border border-[var(--glass-border)] bg-[var(--glass-nav-fill)] backdrop-blur-[18px] shadow-[0_-8px_28px_rgba(0,0,0,0.18)]">
+        <div className="grid grid-cols-5 w-full h-[4.25rem] px-1.5">
+          {tabs.map(tab => {
+            const isActive = tab.matchScreens
+              ? tab.matchScreens.includes(activeScreen)
+              : activeScreen === tab.id;
 
-          const activeColor = theme === 'light' ? 'text-red-600 font-bold' : 'text-[#e94560] font-bold';
-          const inactiveColor = theme === 'light' ? 'text-slate-500 hover:text-slate-900 font-medium' : 'text-[var(--muted)] hover:text-[var(--text)] font-medium';
-
-          return (
-            <button
-              key={tab.id}
-              id={`nav-tab-${tab.id}`}
-              onClick={() => setActiveScreen(tab.id)}
-              className={`h-full w-full flex flex-col items-center justify-center py-1 relative transition-transform duration-150 ease-out active:scale-90 group select-none cursor-pointer ${
-                isActive ? activeColor : inactiveColor
-              }`}
-              type="button"
-            >
-              {/* Icon Container with subtle active glow */}
-              <div className="relative flex items-center justify-center h-6 w-6">
-                {isActive && (
-                  <span className={`absolute inset-0 rounded-full blur-sm scale-125 pointer-events-none transition-all ${
-                    theme === 'light' ? 'bg-red-500/20' : 'bg-[#e94560]/25'
-                  }`} />
-                )}
-                <Icon
-                  name={tab.icon}
-                  size={20}
-                  strokeWidth={isActive ? 2.3 : 1.8}
-                  className={`transition-all duration-150 relative z-10 ${
-                    isActive
-                      ? `scale-110 ${theme === 'light' ? 'text-red-600' : 'text-[#e94560]'}`
-                      : `group-hover:scale-105 ${theme === 'light' ? 'text-slate-500 group-hover:text-slate-800' : 'text-[var(--muted)]'}`
-                  }`}
-                />
-              </div>
-
-              {/* Symmetrical Label */}
-              <span
-                className={`text-[10px] tracking-tight mt-1 whitespace-nowrap uppercase transition-all duration-150 ${
-                  isActive ? activeColor : inactiveColor
-                }`}
+            return (
+              <button
+                key={tab.id}
+                id={`nav-tab-${tab.id}`}
+                type="button"
+                aria-label={tab.label}
+                aria-current={isActive ? 'page' : undefined}
+                onClick={() => setActiveScreen(tab.id)}
+                className="h-full w-full flex flex-col items-center justify-center gap-1 select-none cursor-pointer active:scale-90 transition-transform duration-150"
               >
-                {tab.label}
-              </span>
-
-              {/* Active Indicator Pip with fixed geometry to avoid layout shift */}
-              <div className="h-1.5 flex items-center justify-center mt-0.5">
                 <span
-                  className={`w-1 h-1 rounded-full transition-all duration-150 ${
+                  className={`flex h-11 w-11 items-center justify-center rounded-full transition-all duration-200 ${
                     isActive
-                      ? theme === 'light'
-                        ? 'bg-red-600 opacity-100 scale-100 shadow-sm shadow-red-500/50'
-                        : 'bg-[#e94560] opacity-100 scale-100'
-                      : 'bg-transparent opacity-0 scale-50'
+                      ? isLight
+                        ? 'bg-[var(--accent)] text-white shadow-md shadow-[var(--accent)]/30'
+                        : 'bg-[#f2ecc8] text-[#1a0508] shadow-md shadow-black/25'
+                      : isLight
+                        ? 'bg-transparent text-[var(--muted)]'
+                        : 'bg-transparent text-white'
                   }`}
-                />
-              </div>
-            </button>
-          );
-        })}
+                >
+                  <Icon
+                    name={tab.icon}
+                    size={20}
+                    strokeWidth={isActive ? 2.25 : 1.75}
+                  />
+                </span>
+                <span
+                  className={`text-[9px] tracking-wide uppercase transition-colors duration-150 ${
+                    isActive
+                      ? isLight
+                        ? 'text-[var(--accent)] font-bold'
+                        : 'text-[#f2ecc8] font-bold'
+                      : isLight
+                        ? 'text-[var(--muted)] font-medium'
+                        : 'text-white/70 font-medium'
+                  }`}
+                >
+                  {tab.label}
+                </span>
+              </button>
+            );
+          })}
+        </div>
       </div>
     </nav>
   );

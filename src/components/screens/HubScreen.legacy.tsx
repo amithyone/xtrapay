@@ -7,13 +7,6 @@ import {
   runSwipeHintLoop,
 } from '../../lib/swipeHint';
 
-/**
- * Hub fused with PAKEE + crypto-wallet language:
- * - dark: frosted maroon glass hero + white type
- * - light: solid white hero
- * - Receive | QR | Send nested in the hero
- * Rollback: USE_LEGACY_HUB = true in App.tsx
- */
 export const HubScreen: React.FC = () => {
   const {
     personalBalance,
@@ -27,10 +20,8 @@ export const HubScreen: React.FC = () => {
     setIsPayAtShopOpen,
     setIsScanToPayOpen,
     showToast,
-    theme,
   } = useTransactions();
 
-  const isLight = theme === 'light';
   const actionRailRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef({
     active: false,
@@ -64,6 +55,7 @@ export const HubScreen: React.FC = () => {
       capturing: false,
     };
     el.dataset.dragging = '0';
+    // Do NOT capture yet — allow button clicks until a real drag starts
   };
 
   const onActionPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -113,6 +105,7 @@ export const HubScreen: React.FC = () => {
       } else {
         applyRubber(0);
       }
+      // Keep drag flag briefly so the synthetic click after a drag is ignored
       if (wasDragging) {
         window.setTimeout(() => {
           drag.moved = false;
@@ -125,6 +118,7 @@ export const HubScreen: React.FC = () => {
     }
   };
 
+  // Repeated idle swipe hint — ease-in-out half-tile peek (see design-animation skill)
   useEffect(() => {
     const el = actionRailRef.current;
     if (!el) return;
@@ -145,18 +139,32 @@ export const HubScreen: React.FC = () => {
     showToast('Copied to Clipboard', `Account ${accountNumber} (${bankName}) copied.`);
   };
 
-  const moreActions = [
+  const actions = [
+    {
+      label: 'Send',
+      icon: 'arrow_upward',
+      tint: 'text-red-600',
+      pad: 'bg-red-500/18',
+      onClick: () => setActiveScreen('transfer'),
+    },
+    {
+      label: 'Receive',
+      icon: 'arrow_downward',
+      tint: 'text-emerald-600',
+      pad: 'bg-emerald-500/18',
+      onClick: () => setActiveScreen('receive'),
+    },
     {
       label: 'Bills',
       icon: 'receipt_long',
-      tint: isLight ? 'text-cyan-600' : 'text-white',
+      tint: 'text-cyan-600',
       pad: 'bg-cyan-500/18',
       onClick: () => setActiveScreen('paybills'),
     },
     {
       label: 'Chat',
       icon: 'chat_bubble',
-      tint: isLight ? 'text-purple-600' : 'text-white',
+      tint: 'text-purple-600',
       pad: 'bg-purple-500/18',
       onClick: () =>
         showToast('Xtrapay Chat', 'Peer-to-peer encrypted messaging active.', 'info'),
@@ -164,63 +172,49 @@ export const HubScreen: React.FC = () => {
     {
       label: 'Nearby',
       icon: 'wifi',
-      tint: isLight ? 'text-orange-600' : 'text-white',
+      tint: 'text-orange-600',
       pad: 'bg-orange-500/18',
       onClick: () => setIsNearbyPayOpen(true),
     },
     {
       label: 'Shop',
       icon: 'store',
-      tint: isLight ? 'text-teal-600' : 'text-white',
+      tint: 'text-teal-600',
       pad: 'bg-teal-500/18',
       onClick: () => setIsPayAtShopOpen(true),
     },
     {
       label: 'Scan',
       icon: 'qr_code',
-      tint: isLight ? 'text-sky-600' : 'text-white',
+      tint: 'text-sky-600',
       pad: 'bg-sky-500/18',
       onClick: () => setIsScanToPayOpen(true),
     },
   ] as const;
 
   return (
-    <main className="flex-1 min-w-0 px-5 pt-6 pb-32 space-y-4">
-      {/* Quiet greeting — stays off the solid hero */}
-      <header className="px-1 pt-1">
-        <p className="text-[12px] text-[var(--muted)] tracking-wide leading-none">Good evening</p>
-        <h1 className="mt-2 text-[15px] font-semibold text-[var(--text)] tracking-tight">
+    <main className="flex-1 min-w-0 px-5 pt-7 pb-28">
+      <header className="glass-card glass-strong mb-4 !rounded-[20px] px-6 py-4">
+        <p className="text-[12px] text-[var(--muted)] tracking-wide leading-none">
+          Good evening
+        </p>
+        <h1 className="mt-2.5 text-[15px] font-medium text-[var(--text)] tracking-tight leading-snug">
           {accountContext === 'personal' ? 'Personal wallet' : 'Business wallet'}
         </h1>
       </header>
 
-      {/* Hero — dark: maroon glass + white type · light: solid white */}
       <section
         id="hub-smart-balance-card"
-        className="relative overflow-hidden rounded-[32px] px-5 pt-6 pb-5"
+        className="glass-card relative overflow-hidden !rounded-[24px] px-6 py-6"
       >
         <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <p
-              className={`text-[10px] uppercase tracking-[0.24em] ${
-                isLight ? 'text-zinc-500' : 'text-white/55'
-              }`}
-            >
+          <div>
+            <p className="text-[10px] uppercase tracking-[0.22em] text-[var(--muted)]">
               Available
             </p>
-            <div className="mt-3 flex items-baseline gap-1.5">
-              <span
-                className={`font-mono text-base font-medium ${
-                  isLight ? 'text-[var(--accent)]' : 'text-white/75'
-                }`}
-              >
-                ₦
-              </span>
-              <span
-                className={`font-mono text-[2.05rem] font-medium leading-none tracking-tight ${
-                  isLight ? 'text-[#0a0a0a]' : 'text-white'
-                }`}
-              >
+            <div className="mt-3.5 flex items-baseline gap-1">
+              <span className="font-mono text-sm font-normal text-[var(--accent)]">₦</span>
+              <span className="font-mono text-[1.5rem] font-normal leading-none tracking-tight text-[var(--text)]">
                 {balanceHidden
                   ? '••••••••'
                   : currentBalance.toLocaleString('en-US', {
@@ -233,74 +227,34 @@ export const HubScreen: React.FC = () => {
           <button
             aria-label="Toggle Balance Visibility"
             onClick={() => setBalanceHidden(!balanceHidden)}
-            className={`flex h-10 w-10 items-center justify-center rounded-full active:scale-95 transition-transform ${
-              isLight
-                ? 'bg-zinc-100 text-zinc-600'
-                : 'bg-white/10 text-white/80 border border-white/15'
-            }`}
+            className="frosted-pad !h-9 !w-9 !min-h-9 !min-w-9 !rounded-full text-[var(--muted)]"
             type="button"
           >
             <Icon name={balanceHidden ? 'visibility_off' : 'visibility'} size={16} />
           </button>
         </div>
 
-        <button
-          type="button"
-          onClick={copyAccount}
-          className={`mt-5 inline-flex items-center rounded-full px-3.5 py-1.5 text-[11px] font-mono active:scale-[0.98] transition-transform ${
-            isLight
-              ? 'bg-zinc-100 text-zinc-600'
-              : 'bg-white/10 text-white/70 border border-white/12'
-          }`}
-        >
-          {bankName} · {accountNumber.slice(0, 4)}…{accountNumber.slice(-4)}
-        </button>
-
-        {/* Dual pills + floating QR */}
-        <div className="mt-5 grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+        <div className="mt-6 flex items-center justify-between gap-2">
           <button
             type="button"
-            onClick={() => setActiveScreen('receive')}
-            className={`h-12 rounded-full font-semibold text-[13px] flex items-center justify-center gap-1.5 active:scale-[0.98] transition-transform ${
-              isLight
-                ? 'bg-zinc-100 text-[#0a0a0a] border border-black/6'
-                : 'bg-white/12 text-white border border-white/18 backdrop-blur-md'
-            }`}
+            onClick={copyAccount}
+            className="glass-chip !rounded-full !px-3.5 !py-2 !text-[11px] font-mono text-[var(--muted)] active:scale-[0.98]"
           >
-            Receive
-            <Icon name="arrow_downward" size={15} />
+            {bankName} · {accountNumber.slice(0, 4)}…{accountNumber.slice(-4)}
           </button>
-
           <button
             type="button"
             onClick={() => setIsQrOpen(true)}
+            className="frosted-pad !h-9 !w-9 !min-h-9 !min-w-9 !rounded-full text-[var(--muted)]"
             aria-label="Show QR"
-            className={`relative z-10 -my-1 flex h-12 w-12 items-center justify-center rounded-full shadow-md active:scale-95 transition-transform ${
-              isLight
-                ? 'bg-[var(--accent)] text-white'
-                : 'bg-[#f2ecc8] text-[#1a0508]'
-            }`}
           >
-            <Icon name="qr_code_2" size={18} />
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveScreen('transfer')}
-            className="h-12 rounded-full bg-[var(--accent)] text-white font-semibold text-[13px] flex items-center justify-center gap-1.5 active:scale-[0.98] transition-transform shadow-md shadow-[var(--accent)]/30"
-          >
-            Send
-            <Icon name="arrow_upward" size={15} />
+            <Icon name="qr_code_2" size={16} />
           </button>
         </div>
       </section>
 
-      {/* More tools rail */}
-      <section className="min-w-0 w-full max-w-full">
-        <p className="mb-2 px-1 text-[10px] font-medium uppercase tracking-[0.28em] text-[var(--muted)]">
-          More
-        </p>
-        <div className="hub-action-shell !rounded-[28px] min-w-0 w-full max-w-full overflow-hidden">
+      <section className="mt-6 min-w-0 w-full max-w-full">
+        <div className="hub-action-shell min-w-0 w-full max-w-full overflow-hidden">
           <div
             ref={actionRailRef}
             className="hub-action-scroll flex flex-nowrap gap-1 px-2.5 py-3.5 select-none cursor-grab active:cursor-grabbing"
@@ -313,11 +267,12 @@ export const HubScreen: React.FC = () => {
               className="hub-action-track flex flex-nowrap gap-1 will-change-transform"
               style={{ transform: `translate3d(${rubberX}px, 0, 0)` }}
             >
-              {moreActions.map(action => (
+              {actions.map((action) => (
                 <button
                   key={action.label}
                   type="button"
-                  onClick={e => {
+                  onClick={(e) => {
+                    // Ignore click that follows a real drag swipe
                     if (
                       dragRef.current.moved ||
                       actionRailRef.current?.dataset.dragging === '1'
@@ -328,14 +283,14 @@ export const HubScreen: React.FC = () => {
                     }
                     action.onClick();
                   }}
-                  className="flex w-[4.5rem] min-w-[4.5rem] max-w-[4.5rem] shrink-0 flex-col items-center gap-2 rounded-2xl py-1.5 cursor-pointer"
+                  className="flex w-[4.75rem] min-w-[4.75rem] max-w-[4.75rem] shrink-0 grow-0 basis-[4.75rem] flex-col items-center gap-2 rounded-2xl py-2 cursor-pointer"
                 >
                   <span
                     className={`flex h-11 w-11 items-center justify-center rounded-full ${action.pad} ${action.tint}`}
                   >
                     <Icon name={action.icon} size={18} />
                   </span>
-                  <span className="text-[10px] font-bold text-[var(--text)] text-center leading-tight whitespace-nowrap">
+                  <span className="text-[10px] font-bold text-[var(--text)] text-center leading-tight px-0.5 whitespace-nowrap">
                     {action.label}
                   </span>
                 </button>
@@ -343,49 +298,43 @@ export const HubScreen: React.FC = () => {
             </div>
           </div>
         </div>
+        <p className="mt-1.5 text-center text-[10px] text-[var(--muted)] opacity-60">
+          Swipe for more →
+        </p>
       </section>
 
-      {/* Bento pebbles — matching glass pair */}
-      <section className="grid grid-cols-2 gap-3">
-        <button
-          type="button"
-          onClick={() => setActiveScreen('save_together')}
-          className="glass-card glass-strong !rounded-[28px] px-4 py-4 text-left active:scale-[0.99] transition-transform"
-        >
-          <span
-            className={`flex h-10 w-10 items-center justify-center rounded-full bg-purple-500/15 ${
-              isLight ? 'text-purple-500' : 'text-white'
-            }`}
+      <section className="mt-6">
+        <div className="space-y-3">
+          <button
+            type="button"
+            onClick={() => setActiveScreen('save_together')}
+            className="glass-card glass-strong relative z-10 flex w-full items-center gap-3.5 !rounded-[20px] px-5 py-4 text-left cursor-pointer active:scale-[0.99] transition-transform"
           >
-            <Icon name="groups" size={17} />
-          </span>
-          <span className="mt-3 block text-[13px] font-semibold text-[var(--text)] leading-snug">
-            Group savings
-          </span>
-          <span className="mt-1 block text-[11px] text-[var(--muted)] leading-snug">
-            Accountability
-          </span>
-        </button>
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-purple-500/12 text-purple-300">
+              <Icon name="groups" size={17} />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-[13px] font-medium text-[var(--text)]">Group savings</span>
+              <span className="mt-0.5 block text-[11px] text-[var(--muted)]">Accountability savings</span>
+            </span>
+            <Icon name="chevron_right" size={18} className="text-[var(--muted)] opacity-50" />
+          </button>
 
-        <button
-          type="button"
-          onClick={() => setActiveScreen('ask_money')}
-          className="glass-card glass-strong !rounded-[28px] px-4 py-4 text-left active:scale-[0.99] transition-transform"
-        >
-          <span
-            className={`flex h-10 w-10 items-center justify-center rounded-full bg-[var(--accent)]/15 ${
-              isLight ? 'text-[var(--accent)]' : 'text-white'
-            }`}
+          <button
+            type="button"
+            onClick={() => setActiveScreen('ask_money')}
+            className="glass-card glass-strong relative z-10 flex w-full items-center gap-3.5 !rounded-[20px] px-5 py-4 text-left cursor-pointer active:scale-[0.99] transition-transform"
           >
-            <Icon name="hand_coins" size={17} />
-          </span>
-          <span className="mt-3 block text-[13px] font-semibold text-[var(--text)] leading-snug">
-            Request money
-          </span>
-          <span className="mt-1 block text-[11px] text-[var(--muted)] leading-snug">
-            Friends & family
-          </span>
-        </button>
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-cyan-500/12 text-cyan-300">
+              <Icon name="hand_coins" size={17} />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-[13px] font-medium text-[var(--text)]">Request for money</span>
+              <span className="mt-0.5 block text-[11px] text-[var(--muted)]">Ask people you know for money</span>
+            </span>
+            <Icon name="chevron_right" size={18} className="text-[var(--muted)] opacity-50" />
+          </button>
+        </div>
       </section>
     </main>
   );

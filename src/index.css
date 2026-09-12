@@ -240,6 +240,28 @@ button:active:not(:disabled),
   100% { transform: translate(15px, 20px) scale(0.98); }
 }
 
+/* Continuous slow pebble float — never stops; tab drift lives on parent */
+@keyframes pebble-float-1 {
+  0% { transform: translate3d(0, 0, 0) rotate(0deg); }
+  50% { transform: translate3d(14px, -11px, 0) rotate(1.2deg); }
+  100% { transform: translate3d(-10px, 12px, 0) rotate(-0.8deg); }
+}
+@keyframes pebble-float-2 {
+  0% { transform: translate3d(0, 0, 0) rotate(0deg); }
+  50% { transform: translate3d(-12px, 10px, 0) rotate(-1deg); }
+  100% { transform: translate3d(11px, -9px, 0) rotate(1.1deg); }
+}
+@keyframes pebble-float-3 {
+  0% { transform: translate3d(0, 0, 0) rotate(0deg); }
+  50% { transform: translate3d(9px, 13px, 0) rotate(0.9deg); }
+  100% { transform: translate3d(-13px, -8px, 0) rotate(-1.2deg); }
+}
+@keyframes pebble-float-4 {
+  0% { transform: translate3d(0, 0, 0) rotate(0deg); }
+  50% { transform: translate3d(-8px, -12px, 0) rotate(1deg); }
+  100% { transform: translate3d(12px, 9px, 0) rotate(-0.7deg); }
+}
+
 .animate-orb-drift-1 {
   animation: orb-drift-1 18s ease-in-out infinite alternate;
 }
@@ -251,6 +273,19 @@ button:active:not(:disabled),
 }
 .animate-orb-drift-4 {
   animation: orb-drift-4 24s ease-in-out infinite alternate;
+}
+
+.animate-pebble-float-1 {
+  animation: pebble-float-1 34s ease-in-out infinite alternate;
+}
+.animate-pebble-float-2 {
+  animation: pebble-float-2 40s ease-in-out infinite alternate;
+}
+.animate-pebble-float-3 {
+  animation: pebble-float-3 36s ease-in-out infinite alternate;
+}
+.animate-pebble-float-4 {
+  animation: pebble-float-4 42s ease-in-out infinite alternate;
 }
 
 /* Frosted glass card — default translucency */
@@ -289,18 +324,45 @@ button:active:not(:disabled),
     0 14px 32px rgba(0, 0, 0, 0.16) !important;
 }
 
+/* Dark hub hero — frosted maroon glass (atmosphere bleeds through) */
+/* Hub hero default — dark: black 40% · maroon 55% · white 5% */
 #hub-smart-balance-card {
-  background: var(--glass-fill-strong) !important;
-  backdrop-filter: blur(var(--glass-blur)) saturate(165%) !important;
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(165%) !important;
-  border: 1px solid var(--glass-border) !important;
+  background:
+    linear-gradient(
+      155deg,
+      rgba(255, 255, 255, 0.05) 0%,
+      transparent 38%
+    ),
+    linear-gradient(
+      145deg,
+      rgba(127, 29, 29, 0.55) 0%,
+      rgba(90, 18, 28, 0.52) 42%,
+      rgba(55, 10, 18, 0.48) 100%
+    ),
+    rgba(0, 0, 0, 0.40) !important;
+  backdrop-filter: blur(22px) saturate(160%) !important;
+  -webkit-backdrop-filter: blur(22px) saturate(160%) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
   box-shadow:
-    0 2px 4px rgba(0, 0, 0, 0.08),
-    0 14px 32px rgba(0, 0, 0, 0.16) !important;
+    0 1px 2px rgba(0, 0, 0, 0.35),
+    0 8px 20px rgba(0, 0, 0, 0.40),
+    0 28px 56px rgba(0, 0, 0, 0.48),
+    inset 0 1px 0 rgba(255, 255, 255, 0.10) !important;
+  color: #ffffff;
 }
 
 html.light #hub-smart-balance-card,
-[data-theme="light"] #hub-smart-balance-card,
+[data-theme="light"] #hub-smart-balance-card {
+  background: #ffffff !important;
+  border: 1px solid rgba(15, 15, 15, 0.08) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  box-shadow:
+    0 2px 6px rgba(15, 23, 42, 0.06),
+    0 14px 36px rgba(15, 23, 42, 0.10) !important;
+  color: #0a0a0a;
+}
+
 html.light .hub-action-shell,
 [data-theme="light"] .hub-action-shell,
 html.light .glass-card.glass-strong,
@@ -556,19 +618,49 @@ html:not(.light) body {
   color: var(--text) !important;
 }
 
-/* Dark frosted cards — translucent over maroon night */
+/* Dark frosted cards — translucent over maroon night + lifted shadow */
 [data-theme="dark"] .glass-card,
 html:not(.light) .glass-card,
 [data-theme="dark"] .hub-action-shell,
 html:not(.light) .hub-action-shell,
-[data-theme="dark"] #hub-smart-balance-card,
-html:not(.light) #hub-smart-balance-card,
 [data-theme="dark"] .glass-card.glass-strong,
 html:not(.light) .glass-card.glass-strong {
   background: rgba(40, 12, 18, 0.42) !important;
   border: 1px solid rgba(255, 255, 255, 0.14) !important;
   backdrop-filter: blur(18px) saturate(140%) !important;
   -webkit-backdrop-filter: blur(18px) saturate(140%) !important;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.32),
+    0 6px 16px rgba(0, 0, 0, 0.36),
+    0 22px 44px rgba(0, 0, 0, 0.42),
+    inset 0 1px 0 rgba(255, 255, 255, 0.10) !important;
+}
+
+/* Dark hub hero — black 40% · maroon 55% · white 5% */
+[data-theme="dark"] #hub-smart-balance-card,
+html:not(.light) #hub-smart-balance-card {
+  background:
+    linear-gradient(
+      155deg,
+      rgba(255, 255, 255, 0.05) 0%,
+      transparent 38%
+    ),
+    linear-gradient(
+      145deg,
+      rgba(127, 29, 29, 0.55) 0%,
+      rgba(90, 18, 28, 0.52) 42%,
+      rgba(55, 10, 18, 0.48) 100%
+    ),
+    rgba(0, 0, 0, 0.40) !important;
+  backdrop-filter: blur(22px) saturate(160%) !important;
+  -webkit-backdrop-filter: blur(22px) saturate(160%) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.35),
+    0 8px 20px rgba(0, 0, 0, 0.40),
+    0 28px 56px rgba(0, 0, 0, 0.48),
+    inset 0 1px 0 rgba(255, 255, 255, 0.10) !important;
+  color: #ffffff;
 }
 
 /* Light mode glass uses :root tokens — keep specular soft */
@@ -857,6 +949,15 @@ html.light .hairline-inset,
     inset 0 1px 0 0 rgba(255, 255, 255, 0.06) !important;
 }
 
+/* Circle-active nav: outer shell transparent; glass lives on inner pill */
+#bottom-navigation-bar[data-nav-style="circle-active"] {
+  background: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border-top: none !important;
+  box-shadow: none !important;
+}
+
 /* Top App Bar Frosted Glass — light overrides */
 html.light header,
 [data-theme="light"] header,
@@ -881,6 +982,15 @@ html.light #bottom-navigation-bar,
   box-shadow: 
     0 -10px 32px rgba(15, 23, 42, 0.06),
     inset 0 1px 1.5px 0 rgba(255, 255, 255, 0.7) !important;
+}
+
+html.light #bottom-navigation-bar[data-nav-style="circle-active"],
+[data-theme="light"] #bottom-navigation-bar[data-nav-style="circle-active"] {
+  background: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border-top: none !important;
+  box-shadow: none !important;
 }
 
 /* Modals & Dialogs */
@@ -924,5 +1034,70 @@ html.light #virtual-dollar-card [class*="bg-[#31353e]"],
 [data-theme="light"] #virtual-dollar-card [class*="bg-[#31353e]"] {
   background-color: rgba(255, 255, 255, 0.12) !important;
   color: #f1f5f9 !important;
+}
+
+/* Floating toast — frosted glass, matches hub section cards */
+@keyframes app-toast-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, -12px, 0) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+.app-toast {
+  animation: app-toast-in 0.32s cubic-bezier(0.4, 0, 0.2, 1) both;
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  backdrop-filter: blur(18px) saturate(150%);
+}
+
+.app-toast--dark {
+  color: #ffffff;
+  background:
+    linear-gradient(
+      155deg,
+      rgba(255, 255, 255, 0.06) 0%,
+      transparent 40%
+    ),
+    linear-gradient(
+      145deg,
+      rgba(127, 29, 29, 0.45) 0%,
+      rgba(40, 10, 16, 0.55) 55%,
+      rgba(0, 0, 0, 0.40) 100%
+    );
+  border-color: rgba(255, 255, 255, 0.14) !important;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.32),
+    0 10px 28px rgba(0, 0, 0, 0.42),
+    inset 0 1px 0 rgba(255, 255, 255, 0.10);
+}
+
+.app-toast--light {
+  color: #0a0a0a;
+  background: rgba(255, 255, 255, 0.82);
+  border-color: rgba(15, 15, 15, 0.10) !important;
+  box-shadow:
+    0 2px 6px rgba(15, 23, 42, 0.06),
+    0 14px 36px rgba(15, 23, 42, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.55);
+}
+
+.app-toast[data-toast-type="success"].app-toast--dark {
+  border-color: rgba(52, 211, 153, 0.28) !important;
+}
+
+.app-toast[data-toast-type="warning"].app-toast--dark {
+  border-color: rgba(251, 191, 36, 0.28) !important;
+}
+
+.app-toast[data-toast-type="success"].app-toast--light {
+  border-color: rgba(16, 185, 129, 0.28) !important;
+}
+
+.app-toast[data-toast-type="warning"].app-toast--light {
+  border-color: rgba(217, 119, 6, 0.28) !important;
 }
 

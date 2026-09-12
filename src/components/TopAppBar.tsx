@@ -21,6 +21,9 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
     toggleTheme,
   } = useTransactions();
 
+  const isLight = theme === 'light';
+  const iconTone = isLight ? 'text-[var(--muted)]' : 'text-white';
+
   // If on a subscreen that requires a dedicated back header
   const isSubScreen =
     showBack ||
@@ -73,7 +76,7 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
             <button
               aria-label="Simulate Inward Transfer"
               onClick={() => setIsSimulateOpen(true)}
-              className="frosted-pad !h-8 !w-8 !min-h-8 !min-w-8 !rounded-lg text-[#4cd7f6]"
+              className={`frosted-pad !h-8 !w-8 !min-h-8 !min-w-8 !rounded-lg ${isLight ? 'text-[#4cd7f6]' : 'text-white'}`}
               title="Simulate Real-time Incoming Transfer"
               type="button"
             >
@@ -83,7 +86,7 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
               aria-label={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
               id="subscreen-theme-toggle-btn"
               onClick={toggleTheme}
-              className="frosted-pad !h-8 !w-8 !min-h-8 !min-w-8 !rounded-lg text-[var(--muted)]"
+              className={`frosted-pad !h-8 !w-8 !min-h-8 !min-w-8 !rounded-lg ${iconTone}`}
               title={theme === 'dark' ? 'Switch to Light Mode (Crimson Red)' : 'Switch to Dark Mode'}
               type="button"
             >
@@ -92,7 +95,7 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
             <button
               aria-label="Support Agent"
               onClick={() => showToast('Support Agent', 'Connecting to 24/7 Xtrapay Tier-1 Concierge...', 'info')}
-              className="frosted-pad !h-8 !w-8 !min-h-8 !min-w-8 !rounded-lg text-[var(--muted)]"
+              className={`frosted-pad !h-8 !w-8 !min-h-8 !min-w-8 !rounded-lg ${iconTone}`}
               type="button"
             >
               <Icon name="support_agent" size={18} />
@@ -112,7 +115,7 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
           <div className="frosted-pad !h-8 !w-8 !min-h-8 !min-w-8 !rounded-lg p-1">
             <BotanicalXIcon
               className="w-5 h-5"
-              strokeColor={theme === 'light' ? '#dc2626' : '#ef4444'}
+              strokeColor={isLight ? '#dc2626' : '#ffffff'}
               opacity={1}
               strokeWidth={3}
             />
@@ -126,7 +129,11 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
               <span className="text-[17px] font-semibold tracking-tight text-[var(--text)] group-hover:opacity-80 transition-colors">
                 Xtrapay
               </span>
-              <Icon name="expand_more" size={16} className="text-[var(--muted)] transition-colors" />
+              <Icon
+                name="expand_more"
+                size={16}
+                className={`${iconTone} transition-colors`}
+              />
             </button>
             <span className="text-[10px] text-[var(--muted)] font-semibold tracking-wider uppercase">
               {accountContext === 'personal' ? 'PERSONAL ACCOUNT' : 'BUSINESS ACCOUNT'}
@@ -140,7 +147,9 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
           <button
             aria-label="Real-time Simulator"
             onClick={() => setIsSimulateOpen(true)}
-            className="glass-chip !rounded-lg !px-2 !py-1 flex items-center gap-1.5 text-[11px] font-medium text-[#4cd7f6] cursor-pointer"
+            className={`glass-chip !rounded-lg !px-2 !py-1 flex items-center gap-1.5 text-[11px] font-medium cursor-pointer ${
+              isLight ? 'text-[#4cd7f6]' : 'text-white'
+            }`}
             title="Simulate Inward Transfer"
             type="button"
           >
@@ -153,7 +162,7 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
             aria-label={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
             id="main-theme-toggle-btn"
             onClick={toggleTheme}
-            className="frosted-pad !h-8 !w-8 !min-h-8 !min-w-8 !rounded-lg text-[var(--muted)] cursor-pointer"
+            className={`frosted-pad !h-8 !w-8 !min-h-8 !min-w-8 !rounded-lg cursor-pointer ${iconTone}`}
             title={theme === 'dark' ? 'Switch to Light Mode (Crimson Red)' : 'Switch to Dark Mode'}
             type="button"
           >
@@ -164,7 +173,7 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
           <button
             aria-label="Support Agent"
             onClick={() => showToast('Support Agent', 'Live financial concierge connected.', 'info')}
-            className="frosted-pad !h-8 !w-8 !min-h-8 !min-w-8 !rounded-lg text-[var(--muted)] cursor-pointer"
+            className={`frosted-pad !h-8 !w-8 !min-h-8 !min-w-8 !rounded-lg cursor-pointer ${iconTone}`}
             type="button"
           >
             <Icon name="support_agent" size={18} />
@@ -174,7 +183,7 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
           <button
             aria-label="Notifications"
             onClick={() => setActiveScreen('history')}
-            className="frosted-pad !h-8 !w-8 !min-h-8 !min-w-8 !rounded-lg relative text-[var(--muted)] cursor-pointer"
+            className={`frosted-pad !h-8 !w-8 !min-h-8 !min-w-8 !rounded-lg relative cursor-pointer ${iconTone}`}
             type="button"
           >
             <Icon name="notifications" size={18} />
