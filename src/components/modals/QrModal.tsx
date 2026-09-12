@@ -13,8 +13,8 @@ export const QrModal: React.FC = () => {
       : { name: 'Xtrapay Global Ventures', number: '2048991204', bank: 'PROVIDUS BANK' };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md">
-      <div className="glass-card glass-strong !rounded-[24px] p-6 w-full max-w-xs text-center shadow-2xl space-y-4">
+    <div className="app-modal-overlay z-[70] bg-black/70 backdrop-blur-md">
+      <div className="app-modal-panel glass-card glass-strong !rounded-[24px] !max-w-xs p-6 text-center shadow-2xl space-y-4">
         <div className="flex justify-between items-center pb-2 border-b border-[var(--glass-border)]">
           <div className="flex items-center gap-1.5">
             <Icon name="qr_code_2" size={18} className="text-[var(--accent)]" />

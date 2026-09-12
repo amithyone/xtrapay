@@ -186,8 +186,8 @@ export const DollarCardScreen: React.FC = () => {
       </section>
 
       {fundingOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md">
-          <div className="glass-card glass-strong !rounded-[24px] p-5 w-full max-w-sm space-y-4 shadow-2xl">
+        <div className="app-modal-overlay z-[70] bg-black/70 backdrop-blur-md">
+          <div className="app-modal-panel glass-card glass-strong !rounded-[24px] !max-w-sm p-5 space-y-4 shadow-2xl">
             <div className="flex justify-between items-center pb-2 border-b border-[var(--glass-border)]">
               <h3 className="text-[14px] font-semibold text-[var(--text)]">Fund dollar card</h3>
               <button

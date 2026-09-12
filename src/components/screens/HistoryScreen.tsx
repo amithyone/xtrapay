@@ -343,8 +343,8 @@ export const HistoryScreen: React.FC = () => {
       </section>
 
       {selectedTx && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md">
-          <div className="glass-card glass-strong !rounded-[28px] p-5 w-full max-w-sm space-y-4">
+        <div className="app-modal-overlay z-[70] bg-black/70 backdrop-blur-md">
+          <div className="app-modal-panel glass-card glass-strong !rounded-[28px] !max-w-sm p-5 space-y-4">
             <div className="flex justify-between items-center pb-2 border-b border-[var(--glass-border)]">
               <div className="flex items-center gap-2">
                 <Icon name="receipt" size={18} className="text-[var(--accent)]" />

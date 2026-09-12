@@ -576,8 +576,8 @@ export const AskMoneyScreen: React.FC = () => {
 
       {/* Amount keypad sheet */}
       {isKeypadOpen && (
-        <div className="fixed inset-0 z-[75] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-md">
-          <div className="glass-card glass-strong w-full max-w-md !rounded-t-[28px] sm:!rounded-[24px] p-6 shadow-2xl space-y-4">
+        <div className="app-modal-overlay z-[75] bg-black/70 backdrop-blur-md">
+          <div className="app-modal-panel glass-card glass-strong !rounded-[24px] p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between pb-2 border-b border-[var(--glass-border)]">
               <span className="text-[10px] font-medium uppercase tracking-[0.22em] text-[var(--muted)]">
                 {requestKind === 'contact' ? 'Request amount' : 'Credit facility amount'}

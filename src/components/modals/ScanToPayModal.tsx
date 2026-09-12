@@ -101,9 +101,9 @@ export const ScanToPayModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 z-[75] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/85 backdrop-blur-md animate-fadeIn">
+    <div className="app-modal-overlay z-[75] bg-black/85 backdrop-blur-md animate-fadeIn">
       <div
-        className="w-full max-w-md bg-[#181c24] border border-[#464554]/40 rounded-t-3xl sm:rounded-2xl p-6 shadow-2xl space-y-4 animate-slideUp text-left"
+        className="app-modal-panel bg-[#181c24] border border-[#464554]/40 p-6 shadow-2xl space-y-4 animate-slideUp text-left"
         id="scan-to-pay-modal"
       >
         {/* Header */}

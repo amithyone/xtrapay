@@ -36,8 +36,8 @@ export const TransferSuccessModal: React.FC = () => {
   const isStep3Done = activeTransfer.step >= 3;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-[var(--bg-0)]/92 backdrop-blur-md overflow-y-auto">
-      <div className="w-full max-w-md min-h-screen flex flex-col relative border-x border-[var(--glass-border)] pb-12 bg-[var(--bg-0)]">
+    <div className="fixed inset-0 z-[70] flex items-start justify-center bg-[var(--bg-0)]/92 backdrop-blur-md overflow-y-auto">
+      <div className="w-full max-w-md min-h-screen flex flex-col relative border-x border-[var(--glass-border)] pb-28 bg-[var(--bg-0)]">
         <header className="sticky top-0 z-40 border-b border-[var(--glass-border)] bg-[var(--glass-nav-fill)] backdrop-blur-[18px]">
           <div className="flex justify-between items-center w-full px-4 h-14 max-w-md mx-auto">
             <button

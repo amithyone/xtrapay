@@ -49,9 +49,9 @@ export const PayAtShopModal: React.FC = () => {
   const currentAmount = selectedShop?.amount || parseFloat(customAmountStr.replace(/,/g, '')) || 0;
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/75 backdrop-blur-md animate-fadeIn">
+    <div className="app-modal-overlay z-[70] bg-black/75 backdrop-blur-md animate-fadeIn">
       <div
-        className="w-full max-w-md bg-[#181c24] border border-[#464554]/40 rounded-t-3xl sm:rounded-2xl p-6 shadow-2xl space-y-4 animate-slideUp text-left"
+        className="app-modal-panel bg-[#181c24] border border-[#464554]/40 p-6 shadow-2xl space-y-4 animate-slideUp text-left"
         id="pay-at-shop-modal"
       >
         {/* Header */}
@@ -164,8 +164,8 @@ export const PayAtShopModal: React.FC = () => {
 
         {/* MANUAL AMOUNT MODAL */}
         {isAmountModalOpen && selectedShop && (
-          <div className="fixed inset-0 z-[80] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/80 backdrop-blur-md animate-fadeIn">
-            <div className="w-full max-w-md bg-[#181c24] border border-[#464554]/40 rounded-t-3xl sm:rounded-2xl p-6 shadow-2xl space-y-4 animate-slideUp">
+          <div className="app-modal-overlay z-[80] bg-black/80 backdrop-blur-md animate-fadeIn">
+            <div className="app-modal-panel bg-[#181c24] border border-[#464554]/40 p-6 shadow-2xl space-y-4 animate-slideUp">
               <div className="flex items-center justify-between pb-2 border-b border-[#464554]/20">
                 <span className="text-xs font-semibold text-[#dfe2ee] uppercase">
                   Pay {selectedShop.name}

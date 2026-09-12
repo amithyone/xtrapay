@@ -338,8 +338,8 @@ export const PayBillsScreen: React.FC = () => {
 
       {/* Token modal */}
       {generatedTokenModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md">
-          <div className="glass-card glass-strong !rounded-[24px] p-6 w-full max-w-sm text-center space-y-4 shadow-2xl">
+        <div className="app-modal-overlay z-[70] bg-black/70 backdrop-blur-md">
+          <div className="app-modal-panel glass-card glass-strong !rounded-[24px] !max-w-sm p-6 text-center space-y-4 shadow-2xl">
             <div className="w-14 h-14 rounded-full bg-emerald-500/15 border border-emerald-500/35 text-emerald-500 mx-auto flex items-center justify-center">
               <Icon name="electric_bolt" size={26} />
             </div>

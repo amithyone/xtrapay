@@ -23,9 +23,8 @@ export const ShareModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-md">
-      <div className="glass-card glass-strong w-full max-w-sm !rounded-t-[28px] sm:!rounded-[24px] p-6 shadow-2xl space-y-4">
-        <div className="w-10 h-1 rounded-full bg-[var(--glass-border)] mx-auto sm:hidden" />
+    <div className="app-modal-overlay z-[70] bg-black/70 backdrop-blur-md">
+      <div className="app-modal-panel glass-card glass-strong !max-w-sm !rounded-[24px] p-6 shadow-2xl space-y-4">
         <div className="flex justify-between items-center pb-2 border-b border-[var(--glass-border)]">
           <div className="flex items-center gap-1.5">
             <Icon name="share" size={18} className="text-[var(--accent)]" />

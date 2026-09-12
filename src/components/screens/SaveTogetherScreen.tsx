@@ -11,10 +11,10 @@ const fieldClass =
   'w-full h-12 px-4 rounded-2xl bg-black/[0.04] dark:bg-white/[0.06] border border-[var(--glass-border)] text-[var(--text)] text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]/25 transition-all placeholder:text-[var(--muted)]';
 
 const sheetBackdropClass =
-  'fixed inset-0 z-[70] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-md animate-fadeIn';
+  'app-modal-overlay z-[70] bg-black/70 backdrop-blur-md animate-fadeIn';
 
 const sheetPanelClass =
-  'glass-card glass-strong w-full max-w-md !rounded-t-[24px] sm:!rounded-[24px] p-6 shadow-2xl space-y-4 animate-slideUp max-h-[90vh] overflow-y-auto';
+  'app-modal-panel glass-card glass-strong !rounded-[24px] p-6 shadow-2xl space-y-4 animate-slideUp';
 
 export const SaveTogetherScreen: React.FC = () => {
   const {
@@ -448,8 +448,8 @@ export const SaveTogetherScreen: React.FC = () => {
       )}
 
       {isContributeKeypadOpen && (
-        <div className="fixed inset-0 z-[75] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-md animate-fadeIn">
-          <div className="glass-card glass-strong w-full max-w-md !rounded-t-[24px] sm:!rounded-[24px] p-6 shadow-2xl space-y-4 animate-slideUp">
+        <div className="app-modal-overlay z-[75] bg-black/70 backdrop-blur-md animate-fadeIn">
+          <div className="app-modal-panel glass-card glass-strong !rounded-[24px] p-6 shadow-2xl space-y-4 animate-slideUp">
             <div className="flex items-center justify-between pb-2 border-b border-[var(--glass-border)]">
               <span className="text-[12px] font-semibold text-[var(--text)] uppercase tracking-[0.18em]">
                 Contribute to Pot
@@ -507,7 +507,7 @@ export const SaveTogetherScreen: React.FC = () => {
       )}
 
       {isCreateOpen && (
-        <div className="fixed inset-0 z-[75] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-md animate-fadeIn">
+        <div className="app-modal-overlay z-[75] bg-black/70 backdrop-blur-md animate-fadeIn">
           <div className={`${sheetPanelClass} z-[75]`}>
             <div className="flex items-center justify-between pb-2 border-b border-[var(--glass-border)]">
               <div>

@@ -24,9 +24,8 @@ export const SimulateModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 modal-backdrop">
-      <div className="glass-sheet glass-card glass-strong w-full max-w-sm p-6 space-y-4 shadow-2xl">
-        <div className="w-10 h-1 rounded-full bg-white/20 mx-auto sm:hidden" />
+    <div className="app-modal-overlay z-[70] modal-backdrop">
+      <div className="app-modal-panel glass-sheet glass-card glass-strong !max-w-sm p-6 space-y-4 shadow-2xl">
         <div className="flex justify-between items-center pb-2 border-b border-white/10">
           <div className="flex items-center gap-1.5">
             <Icon name="bolt" size={18} className="text-[#4edea3]" />

@@ -48,9 +48,9 @@ export const PinSheetModal: React.FC<PinSheetModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-[80] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/75 backdrop-blur-md animate-fadeIn">
+    <div className="app-modal-overlay z-[80] bg-black/75 backdrop-blur-md animate-fadeIn">
       <div
-        className="w-full max-w-md bg-[#181c24] border border-[#464554]/40 rounded-t-3xl sm:rounded-2xl p-6 shadow-2xl space-y-5 animate-slideUp text-center"
+        className="app-modal-panel bg-[#181c24] border border-[#464554]/40 p-6 shadow-2xl space-y-5 animate-slideUp text-center"
         id="pin-sheet-modal"
       >
         {/* Header Strip */}

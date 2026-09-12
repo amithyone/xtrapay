@@ -408,13 +408,37 @@ html.light .glass-card,
   box-shadow: none !important;
 }
 
-/* Sheet / modal surface */
+/* Sheet / modal surface — fully rounded when centered */
 .glass-sheet {
-  border-radius: 24px 24px 0 0;
+  border-radius: 24px;
   border: 1px solid var(--glass-border);
   background: var(--glass-fill-strong);
   backdrop-filter: blur(28px) saturate(150%);
   -webkit-backdrop-filter: blur(28px) saturate(150%);
+}
+
+/**
+ * Centered modal overlay — keeps Continue / CTAs clear of the floating bottom nav.
+ * Use with a z-index class (z-[70]+). Panel should use .app-modal-panel.
+ */
+.app-modal-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: max(1rem, env(safe-area-inset-top, 0px)) 1rem
+    max(1.25rem, calc(5.75rem + env(safe-area-inset-bottom, 0px))) 1rem;
+  box-sizing: border-box;
+}
+
+.app-modal-panel {
+  width: 100%;
+  max-width: 28rem; /* max-w-md */
+  max-height: min(82vh, 40rem);
+  overflow-y: auto;
+  border-radius: 24px;
+  -webkit-overflow-scrolling: touch;
 }
 
 /* Dimmed frosted backdrop behind sheets */
