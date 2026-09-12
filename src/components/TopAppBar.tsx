@@ -31,7 +31,9 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
     activeScreen === 'receive' ||
     activeScreen === 'paybills' ||
     activeScreen === 'ask_money' ||
-    activeScreen === 'save_together';
+    activeScreen === 'save_together' ||
+    activeScreen === 'terminals' ||
+    activeScreen === 'xpoints';
 
   if (isSubScreen) {
     let screenTitle = title;
@@ -41,6 +43,8 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
       else if (activeScreen === 'paybills') screenTitle = 'Pay Bills';
       else if (activeScreen === 'ask_money') screenTitle = 'Request for money';
       else if (activeScreen === 'save_together') screenTitle = 'Group savings';
+      else if (activeScreen === 'terminals') screenTitle = 'Terminal Management';
+      else if (activeScreen === 'xpoints') screenTitle = 'X-Points';
       else if (activeScreen === 'history') screenTitle = 'Transaction History';
     }
 

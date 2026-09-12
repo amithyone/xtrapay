@@ -14,6 +14,8 @@ import { ReceiveScreen } from './components/screens/ReceiveScreen';
 import { PayBillsScreen } from './components/screens/PayBillsScreen';
 import { AskMoneyScreen } from './components/screens/AskMoneyScreen';
 import { SaveTogetherScreen } from './components/screens/SaveTogetherScreen';
+import { TerminalScreen } from './components/screens/TerminalScreen';
+import { XPointsScreen } from './components/screens/XPointsScreen';
 import { TransferSuccessModal } from './components/modals/TransferSuccessModal';
 import { QrModal } from './components/modals/QrModal';
 import { ShareModal } from './components/modals/ShareModal';
@@ -54,6 +56,10 @@ const AppContent: React.FC = () => {
         return <ReceiveScreen />;
       case 'paybills':
         return <PayBillsScreen />;
+      case 'terminals':
+        return <TerminalScreen />;
+      case 'xpoints':
+        return <XPointsScreen />;
       default:
         return USE_LEGACY_HUB ? <HubScreenLegacy /> : <HubScreen />;
     }

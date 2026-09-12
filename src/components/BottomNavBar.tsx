@@ -22,7 +22,7 @@ export const BottomNavBar: React.FC = () => {
       id: 'hub',
       label: 'Hub',
       icon: 'grid_view',
-      matchScreens: ['hub', 'transfer', 'receive', 'paybills', 'ask_money'],
+      matchScreens: ['hub', 'transfer', 'receive', 'paybills', 'ask_money', 'terminals', 'xpoints'],
     },
     {
       id: 'saving',

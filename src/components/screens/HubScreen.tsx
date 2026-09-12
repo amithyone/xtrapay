@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useTransactions } from '../../context/TransactionContext';
 import { Icon } from '../Icon';
+import { PinSheetModal } from '../common/PinSheetModal';
 import {
   animateRubberRelease,
   clampScrollWithRubber,
@@ -31,6 +32,7 @@ export const HubScreen: React.FC = () => {
   } = useTransactions();
 
   const isLight = theme === 'light';
+  const [isPosPinOpen, setIsPosPinOpen] = useState(false);
   const actionRailRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef({
     active: false,
@@ -182,16 +184,37 @@ export const HubScreen: React.FC = () => {
       pad: 'bg-sky-500/18',
       onClick: () => setIsScanToPayOpen(true),
     },
+    {
+      label: 'POS',
+      icon: 'point_of_sale',
+      tint: isLight ? 'text-rose-600' : 'text-white',
+      pad: 'bg-rose-500/18',
+      onClick: () => setIsPosPinOpen(true),
+    },
   ] as const;
 
   return (
     <main className="flex-1 min-w-0 px-5 pt-6 pb-32 space-y-4">
-      {/* Quiet greeting — stays off the solid hero */}
-      <header className="px-1 pt-1">
-        <p className="text-[12px] text-[var(--muted)] tracking-wide leading-none">Good evening</p>
-        <h1 className="mt-2 text-[15px] font-semibold text-[var(--text)] tracking-tight">
-          {accountContext === 'personal' ? 'Personal wallet' : 'Business wallet'}
-        </h1>
+      {/* Greeting shell — matches More rail radius + soft depth shadow */}
+      <header className="hub-action-shell !rounded-[28px] px-4 py-3.5 flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[12px] text-[var(--muted)] tracking-wide leading-none">Good evening</p>
+          <h1 className="mt-2 text-[15px] font-semibold text-[var(--text)] tracking-tight">
+            {accountContext === 'personal' ? 'Personal wallet' : 'Business wallet'}
+          </h1>
+        </div>
+        <button
+          type="button"
+          onClick={() => setActiveScreen('xpoints')}
+          aria-label="Open X-Points"
+          className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-[14px] active:scale-95 transition-transform shadow-md ${
+            isLight
+              ? 'bg-amber-500/12 text-amber-600 border border-amber-500/20 shadow-amber-500/10'
+              : 'bg-white/10 text-[#f2ecc8] border border-white/14 shadow-black/30'
+          }`}
+        >
+          <Icon name="toll" size={18} />
+        </button>
       </header>
 
       {/* Hero — dark: maroon glass + white type · light: solid white */}
@@ -387,6 +410,17 @@ export const HubScreen: React.FC = () => {
           </span>
         </button>
       </section>
+
+      <PinSheetModal
+        isOpen={isPosPinOpen}
+        onClose={() => setIsPosPinOpen(false)}
+        title="Enter Security PIN"
+        subtitle="Authenticate to open Terminal Management"
+        onSuccess={() => {
+          setIsPosPinOpen(false);
+          setActiveScreen('terminals');
+        }}
+      />
     </main>
   );
 };

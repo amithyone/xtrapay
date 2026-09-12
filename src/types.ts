@@ -8,9 +8,49 @@ export type ScreenType =
   | 'receive'
   | 'paybills'
   | 'ask_money'
-  | 'save_together';
+  | 'save_together'
+  | 'terminals'
+  | 'xpoints';
 
 export type AccountContext = 'personal' | 'business';
+
+export type TerminalStatus =
+  | 'Active'
+  | 'Inactive'
+  | 'Offline'
+  | 'Locked'
+  | 'Pending';
+
+export interface Terminal {
+  id: string;
+  terminalId: string;
+  serialNumber: string;
+  name: string;
+  model: string;
+  address: string;
+  status: TerminalStatus;
+  balance: number;
+  dateMapped: string;
+  lastTransaction: {
+    label: string;
+    at: string;
+  };
+  pendingAddress?: string;
+  addressRequestStatus?: 'None' | 'Pending' | 'Approved' | 'Rejected';
+}
+
+export interface TerminalTx {
+  id: string;
+  terminalId: string;
+  type: string;
+  amount: number;
+  status: 'Successful' | 'Failed' | 'Pending' | 'Reversed' | 'Declined';
+  reference: string;
+  date: string;
+  time: string;
+  commission?: number;
+  xPoints?: number;
+}
 
 export interface Transaction {
   id: string;

@@ -80,6 +80,9 @@ import {
   Image,
   Sun,
   Moon,
+  MonitorSmartphone,
+  MapPin,
+  Pencil,
   LucideProps,
 } from 'lucide-react';
 
@@ -93,6 +96,8 @@ const ICON_MAP: Record<string, React.ComponentType<LucideProps>> = {
   add_card: CreditCard,
   receipt_long: Receipt,
   receipt: Receipt,
+  point_of_sale: MonitorSmartphone,
+  pos: MonitorSmartphone,
 
   // Directional & Arrows
   arrow_back: ArrowLeft,
@@ -179,6 +184,10 @@ const ICON_MAP: Record<string, React.ComponentType<LucideProps>> = {
   photo_camera: Camera,
   image: Image,
   photo_library: Image,
+  location_on: MapPin,
+  place: MapPin,
+  edit: Pencil,
+  edit_note: Pencil,
 
   // Biller & Category Icons
   tv: Tv,
