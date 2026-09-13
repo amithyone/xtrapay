@@ -19,8 +19,16 @@ import {
   walletParentContext,
   type WalletAccount,
 } from '../data/wallets';
-import { getAccessToken, setAccessToken } from '../lib/api';
-import { apiBootstrap, apiLogout, mapApiWallets } from '../lib/xtrapayApi';
+import { ApiError, getAccessToken, setAccessToken } from '../lib/api';
+import {
+  apiBanks,
+  apiBootstrap,
+  apiCreateTransfer,
+  apiLogout,
+  mapApiWallets,
+  type ApiBank,
+} from '../lib/xtrapayApi';
+import { SUPPORTED_BANKS } from '../data/initialData';
 
 interface ToastInfo {
   id: string;
@@ -43,6 +51,8 @@ interface TransactionContextType {
   selectedWallet: WalletAccount;
   selectWallet: (id: string) => void;
   addWallet: (wallet: WalletAccount) => void;
+  banks: ApiBank[];
+  banksLoading: boolean;
   personalBalance: number;
   businessBalance: number;
   flexibleSavings: number;
@@ -74,9 +84,12 @@ interface TransactionContextType {
     amount: number;
     recipientName: string;
     bankName: string;
+    bankCode?: string;
     accountNumber: string;
     narration?: string;
-  }) => void;
+    pin: string;
+    walletId?: string;
+  }) => Promise<void>;
   dismissActiveTransfer: () => void;
   repeatTransfer: () => void;
   
@@ -240,8 +253,10 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
   // Account
   const [accountContext, setAccountContextState] = useState<AccountContext>('personal');
   const [wallets, setWallets] = useState<WalletAccount[]>(INITIAL_WALLETS);
+  const [banks, setBanks] = useState<ApiBank[]>(SUPPORTED_BANKS);
+  const [banksLoading, setBanksLoading] = useState(false);
   const [selectedWalletId, setSelectedWalletId] = useState<string>('personal');
-  const [personalBalance, setPersonalBalance] = useState<number>(4850240.00);
+  const [personalBalance, setPersonalBalance] = useState<number>(0);
   const [businessBalance, setBusinessBalance] = useState<number>(14250000.00);
   const [flexibleSavings, setFlexibleSavings] = useState<number>(214558.04);
   const [strictSavings, setStrictSavings] = useState<number>(2250.00);
@@ -300,6 +315,17 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
     setCardFrozen(data.cardFrozen);
     if (Array.isArray(data.recentTransactions) && data.recentTransactions.length) {
       setTransactions(data.recentTransactions);
+    }
+    setBanksLoading(true);
+    try {
+      const list = await apiBanks();
+      if (Array.isArray(list) && list.length) {
+        setBanks(list);
+      }
+    } catch {
+      // keep previous / fallback list
+    } finally {
+      setBanksLoading(false);
     }
   };
 
@@ -480,88 +506,124 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
     }
   }, [toast]);
 
-  // Real-time transfer initiation & multi-stage settlement
-  const initiateTransfer = ({
+  // Live transfer via MevonPay — no client-side mock settlement
+  const initiateTransfer = async ({
     amount,
     recipientName,
     bankName,
+    bankCode,
     accountNumber,
     narration,
+    pin,
+    walletId,
   }: {
     amount: number;
     recipientName: string;
     bankName: string;
+    bankCode?: string;
     accountNumber: string;
     narration?: string;
+    pin: string;
+    walletId?: string;
   }) => {
-    const refCode = `XTR-${Math.floor(10000000 + Math.random() * 90000000)}`;
     const t1 = getFormattedTime();
+    const pendingRef = `XTR-PENDING-${Date.now()}`;
 
-    // 1. Immediate balance deduction & Daily limit update
-    if (accountContext === 'personal') {
-      setPersonalBalance(prev => Math.max(0, prev - amount));
-    } else {
-      setBusinessBalance(prev => Math.max(0, prev - amount));
-    }
-    setDailySpent(prev => prev + amount);
-
-    // 2. Setup active transfer progress stepper (Step 1)
-    const transferObj: ActiveProcessingTransfer = {
+    setActiveTransfer({
       step: 1,
       amount,
       recipientName,
       bankName,
       accountNumber,
-      reference: refCode,
+      reference: pendingRef,
       narration: narration || 'Instant Funds Transfer',
       initTime: t1,
       processedTime: '',
       settledTime: '',
       isComplete: false,
-    };
-    setActiveTransfer(transferObj);
-
-    // Insert pending transaction at top
-    const newTx: Transaction = {
-      id: `tx-${Date.now()}`,
-      title: `Transfer to ${recipientName}`,
-      subtitle: `${bankName} • ${t1.slice(0, 5)}`,
-      date: 'Today - 11 Sep 2026',
-      timestamp: t1.slice(0, 5),
-      fullTime: t1,
-      amount,
-      type: 'debit',
-      status: 'Processing',
-      category: 'transfer',
-      reference: refCode,
-      bank: bankName,
-      recipient: recipientName,
-      note: narration || 'Xtrapay Direct Settlement',
-    };
-    setTransactions(prev => [newTx, ...prev]);
+    });
     playChime('pop');
 
-    // Step 2: NIBSS switch processing (after 1.3s)
-    setTimeout(() => {
-      const t2 = getFormattedTime();
-      setActiveTransfer(prev => prev ? { ...prev, step: 2, processedTime: t2 } : null);
-      playChime('pop');
-    }, 1300);
-
-    // Step 3: Settled by recipient (after 2.6s)
-    setTimeout(() => {
-      const t3 = getFormattedTime();
-      setActiveTransfer(prev => prev ? { ...prev, step: 3, settledTime: t3, isComplete: true } : null);
-      setTransactions(prev =>
-        prev.map(item =>
-          item.reference === refCode
-            ? { ...item, status: 'Successful', fullTime: t3 }
-            : item
-        )
+    try {
+      setActiveTransfer(prev =>
+        prev ? { ...prev, step: 2, processedTime: getFormattedTime() } : null
       );
+
+      const result = await apiCreateTransfer({
+        walletId: walletId || selectedWalletId,
+        accountNumber,
+        bankName,
+        bankCode,
+        amount,
+        recipientName,
+        narration,
+        pin,
+      });
+
+      const t3 = getFormattedTime();
+      setActiveTransfer({
+        step: 3,
+        amount: result.amount,
+        recipientName: result.recipientName,
+        bankName: result.bankName,
+        accountNumber: result.accountNumber,
+        reference: result.reference,
+        narration: result.narration || narration || 'Instant Funds Transfer',
+        initTime: result.initTime || t1,
+        processedTime: result.processedTime || t3,
+        settledTime: result.settledTime || t3,
+        isComplete: true,
+      });
+
+      if (typeof result.walletBalance === 'number') {
+        const kind =
+          wallets.find(w => w.id === (walletId || selectedWalletId))?.kind ?? 'personal';
+        if (kind === 'personal') setPersonalBalance(result.walletBalance);
+        else if (kind === 'business') setBusinessBalance(result.walletBalance);
+        setWallets(prev =>
+          prev.map(w =>
+            w.id === (walletId || selectedWalletId)
+              ? { ...w, balance: result.walletBalance as number }
+              : w
+          )
+        );
+      } else if (accountContext === 'personal') {
+        setPersonalBalance(prev => Math.max(0, prev - amount));
+      } else {
+        setBusinessBalance(prev => Math.max(0, prev - amount));
+      }
+      setDailySpent(prev => prev + amount);
+
+      const settledTx: Transaction = {
+        id: `tx-${Date.now()}`,
+        title: `Transfer to ${result.recipientName}`,
+        subtitle: `${result.bankName} • ${(result.settledTime || t3).slice(0, 5)}`,
+        date: `Today - ${new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}`,
+        timestamp: (result.settledTime || t3).slice(0, 5),
+        fullTime: result.settledTime || t3,
+        amount: result.amount,
+        type: 'debit',
+        status: 'Successful',
+        category: 'transfer',
+        reference: result.reference,
+        bank: result.bankName,
+        recipient: result.recipientName,
+        note: result.narration || narration || 'Xtrapay Direct Settlement',
+      };
+      setTransactions(prev => [settledTx, ...prev]);
       playChime('success');
-      showToast('Transfer Settled', `₦${amount.toLocaleString()} sent to ${recipientName}`);
-    }, 2700);
+      showToast('Transfer Settled', `₦${amount.toLocaleString()} sent to ${result.recipientName}`);
+    } catch (err) {
+      setActiveTransfer(null);
+      const msg =
+        err instanceof ApiError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : 'Transfer failed';
+      showToast('Transfer failed', msg, 'warning');
+      throw err;
+    }
   };
 
   const dismissActiveTransfer = () => {
@@ -1132,6 +1194,8 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
         selectedWallet,
         selectWallet,
         addWallet,
+        banks,
+        banksLoading,
         personalBalance,
         businessBalance,
         flexibleSavings,

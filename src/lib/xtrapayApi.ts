@@ -128,6 +128,67 @@ export async function apiBootstrap() {
   return apiRequest<ApiBootstrap>('/bootstrap');
 }
 
+export type ApiBank = {
+  id: string;
+  name: string;
+  code: string;
+};
+
+export async function apiBanks() {
+  return apiRequest<ApiBank[]>('/banks');
+}
+
+export async function apiNameEnquiry(payload: {
+  accountNumber: string;
+  bankCode?: string;
+  bankName?: string;
+}) {
+  return apiRequest<{
+    accountNumber: string;
+    accountName: string;
+    bankName?: string | null;
+    bankCode?: string;
+  }>('/transfers/name-enquiry', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export type ApiTransferResult = {
+  id: string;
+  step: number;
+  amount: number;
+  recipientName: string;
+  bankName: string;
+  accountNumber: string;
+  reference: string;
+  narration?: string | null;
+  initTime: string;
+  processedTime: string;
+  settledTime: string;
+  isComplete: boolean;
+  bucket?: string;
+  walletBalance?: number;
+  responseCode?: string | null;
+  providerMessage?: string;
+};
+
+export async function apiCreateTransfer(payload: {
+  walletId?: string;
+  accountNumber: string;
+  bankName: string;
+  bankCode?: string;
+  amount: number;
+  recipientName: string;
+  narration?: string;
+  pin: string;
+}) {
+  return apiRequest<ApiTransferResult>('/transfers', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function apiLogout() {
   try {
     await apiRequest('/auth/logout', { method: 'POST' });

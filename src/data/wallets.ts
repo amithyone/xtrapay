@@ -18,7 +18,7 @@ export const INITIAL_WALLETS: WalletAccount[] = [
     kind: 'personal',
     accountNumber: '0124892019',
     bankName: 'Zenith Bank',
-    balance: 4_850_240,
+    balance: 0,
     subtitle: 'Main wallet',
   },
   {

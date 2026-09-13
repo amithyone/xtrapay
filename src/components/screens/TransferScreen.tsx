@@ -1,6 +1,8 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useTransactions } from '../../context/TransactionContext';
-import { INITIAL_BENEFICIARIES, SUPPORTED_BANKS } from '../../data/initialData';
+import { INITIAL_BENEFICIARIES } from '../../data/initialData';
+import { ApiError } from '../../lib/api';
+import { apiNameEnquiry } from '../../lib/xtrapayApi';
 import { Icon } from '../Icon';
 import { PinSheetModal } from '../common/PinSheetModal';
 
@@ -11,6 +13,8 @@ export const TransferScreen: React.FC = () => {
     wallets,
     selectedWallet,
     selectedWalletId,
+    banks,
+    banksLoading,
     initiateTransfer,
     setActiveScreen,
     showToast,
@@ -23,15 +27,17 @@ export const TransferScreen: React.FC = () => {
 
   const [channel, setChannel] = useState<'bank' | 'wallet'>('bank');
   const [debitWalletId, setDebitWalletId] = useState(selectedWalletId);
-  const [accountNumber, setAccountNumber] = useState<string>('0123984521');
-  const [selectedBank, setSelectedBank] = useState<string>('Access Bank Plc');
+  const [accountNumber, setAccountNumber] = useState<string>('');
+  const [selectedBank, setSelectedBank] = useState<string>('Access Bank');
   const [amountStr, setAmountStr] = useState<string>('50,000');
   const [narration, setNarration] = useState<string>('Project Milestone 2 Settlement');
-  const [recipientName, setRecipientName] = useState<string>('ADEKUNLE OLUMIDE');
+  const [recipientName, setRecipientName] = useState<string>('');
+  const [nameLoading, setNameLoading] = useState(false);
   const [debitModalOpen, setDebitModalOpen] = useState(false);
   const [bankModalOpen, setBankModalOpen] = useState(false);
   const [bankQuery, setBankQuery] = useState('');
   const [pinOpen, setPinOpen] = useState(false);
+  const nameEnquirySeq = useRef(0);
 
   // Always default debit account to the account currently in view
   useEffect(() => {
@@ -59,6 +65,58 @@ export const TransferScreen: React.FC = () => {
     }
   }, [prefilledTransferData, setPrefilledTransferData]);
 
+  useEffect(() => {
+    if (!banks.length) return;
+    if (!banks.some(b => b.name === selectedBank)) {
+      setSelectedBank(banks[0].name);
+    }
+  }, [banks, selectedBank]);
+
+  const selectedBankMeta = useMemo(
+    () => banks.find(b => b.name === selectedBank) ?? null,
+    [banks, selectedBank]
+  );
+
+  useEffect(() => {
+    if (channel !== 'bank') return;
+    const acct = accountNumber.replace(/\D/g, '');
+    if (acct.length !== 10 || !selectedBankMeta?.code) {
+      return;
+    }
+
+    const seq = ++nameEnquirySeq.current;
+    setNameLoading(true);
+    setRecipientName('');
+
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const result = await apiNameEnquiry({
+            accountNumber: acct,
+            bankCode: selectedBankMeta.code,
+            bankName: selectedBankMeta.name,
+          });
+          if (seq !== nameEnquirySeq.current) return;
+          setRecipientName(result.accountName);
+        } catch (err) {
+          if (seq !== nameEnquirySeq.current) return;
+          setRecipientName('');
+          const msg =
+            err instanceof ApiError
+              ? err.message
+              : 'Could not resolve account name.';
+          showToast('Name enquiry failed', msg, 'warning');
+        } finally {
+          if (seq === nameEnquirySeq.current) setNameLoading(false);
+        }
+      })();
+    }, 350);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [accountNumber, selectedBankMeta, channel, showToast]);
+
   const debitWallet = useMemo(
     () => wallets.find(w => w.id === debitWalletId) ?? selectedWallet,
     [wallets, debitWalletId, selectedWallet]
@@ -78,11 +136,11 @@ export const TransferScreen: React.FC = () => {
 
   const filteredBanks = useMemo(() => {
     const q = bankQuery.trim().toLowerCase();
-    if (!q) return SUPPORTED_BANKS;
-    return SUPPORTED_BANKS.filter(
+    if (!q) return banks;
+    return banks.filter(
       b => b.name.toLowerCase().includes(q) || b.code.includes(q)
     );
-  }, [bankQuery]);
+  }, [bankQuery, banks]);
 
   const money = (n: number) =>
     `₦${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -90,8 +148,8 @@ export const TransferScreen: React.FC = () => {
   const handleSelectBeneficiary = (ben: (typeof INITIAL_BENEFICIARIES)[0]) => {
     setAccountNumber(ben.accountNumber);
     setSelectedBank(ben.bank);
-    setRecipientName(ben.name.toUpperCase());
-    showToast('Beneficiary Selected', `${ben.name} (${ben.bank}) loaded.`);
+    setRecipientName('');
+    showToast('Beneficiary Selected', `${ben.name} (${ben.bank}) — verifying name…`);
   };
 
   const handleQuickAmount = (val: number) => {
@@ -116,22 +174,35 @@ export const TransferScreen: React.FC = () => {
       showToast('Invalid account', 'Enter a valid 10-digit account number.', 'warning');
       return;
     }
-    if (!selectedBank.trim()) {
+    if (channel === 'bank' && !selectedBank.trim()) {
       showToast('Select bank', 'Choose a destination bank to continue.', 'warning');
+      return;
+    }
+    if (channel === 'bank' && (nameLoading || !recipientName.trim())) {
+      showToast(
+        'Name enquiry required',
+        nameLoading
+          ? 'Wait for the account name to resolve.'
+          : 'Account name could not be verified yet.',
+        'warning'
+      );
       return;
     }
     setPinOpen(true);
   };
 
-  const confirmTransfer = () => {
+  const confirmTransfer = (pin: string) => {
     const numericAmount = parseFloat(amountStr.replace(/,/g, ''));
     setPinOpen(false);
-    initiateTransfer({
+    void initiateTransfer({
       amount: numericAmount,
       recipientName: recipientName || 'BENEFICIARY RECIPIENT',
       bankName: selectedBank,
+      bankCode: selectedBankMeta?.code,
       accountNumber,
       narration: narration || `From ${debitWallet.name}`,
+      pin,
+      walletId: debitWalletId,
     });
   };
 
@@ -237,9 +308,9 @@ export const TransferScreen: React.FC = () => {
             onChange={e => {
               const val = e.target.value.replace(/\D/g, '');
               setAccountNumber(val);
-              if (val.length === 10) {
-                setRecipientName('ADEKUNLE OLUMIDE');
-              } else {
+              if (val.length !== 10) {
+                nameEnquirySeq.current += 1;
+                setNameLoading(false);
                 setRecipientName('');
               }
             }}
@@ -275,7 +346,14 @@ export const TransferScreen: React.FC = () => {
           </button>
         )}
 
-        {recipientName && (
+        {nameLoading && (
+          <div className="rounded-2xl border border-[var(--glass-border)] bg-black/[0.03] dark:bg-white/[0.04] px-3.5 py-2.5 flex items-center gap-2">
+            <Icon name="sync" size={16} className="text-[var(--accent)] shrink-0 animate-spin" />
+            <p className="text-[12px] text-[var(--muted)]">Resolving account name…</p>
+          </div>
+        )}
+
+        {recipientName && !nameLoading && (
           <div className="rounded-2xl border border-emerald-500/25 bg-emerald-500/10 px-3.5 py-2.5 flex items-center gap-2">
             <Icon name="verified" size={16} className="text-emerald-500 shrink-0" />
             <div className="min-w-0">
@@ -476,6 +554,11 @@ export const TransferScreen: React.FC = () => {
                 <h2 className="mt-1 text-[16px] font-semibold text-[var(--text)]">
                   Destination bank
                 </h2>
+                <p className="mt-0.5 text-[11px] text-[var(--muted)]">
+                  {banksLoading
+                    ? 'Loading banks from backend…'
+                    : `${banks.length.toLocaleString()} banks from backend`}
+                </p>
               </div>
               <button
                 type="button"
@@ -548,7 +631,7 @@ export const TransferScreen: React.FC = () => {
         subtitle="Enter your 4-digit transaction PIN to proceed"
         amount={parseFloat(amountStr.replace(/,/g, '')) || undefined}
         recipient={recipientName || selectedBank}
-        onSuccess={() => confirmTransfer()}
+        onSuccess={pin => confirmTransfer(pin)}
       />
     </main>
   );

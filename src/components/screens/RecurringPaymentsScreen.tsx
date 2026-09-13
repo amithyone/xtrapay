@@ -1,6 +1,8 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useTransactions } from '../../context/TransactionContext';
-import { INITIAL_BENEFICIARIES, SUPPORTED_BANKS } from '../../data/initialData';
+import { INITIAL_BENEFICIARIES } from '../../data/initialData';
+import { ApiError } from '../../lib/api';
+import { apiNameEnquiry } from '../../lib/xtrapayApi';
 import { Icon } from '../Icon';
 import { PinSheetModal } from '../common/PinSheetModal';
 
@@ -68,8 +70,10 @@ function nextCustomRunLabel(
  * Recurring payments — list first, create via bank-transfer flow, delete + run history.
  */
 export const RecurringPaymentsScreen: React.FC = () => {
-  const { personalBalance, showToast } = useTransactions();
+  const { personalBalance, showToast, banks, banksLoading } = useTransactions();
   const [view, setView] = useState<ViewMode>('list');
+  const nameEnquirySeq = useRef(0);
+  const [nameLoading, setNameLoading] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
 
   const [plans, setPlans] = useState<RecurringPlan[]>([
@@ -153,17 +157,65 @@ export const RecurringPaymentsScreen: React.FC = () => {
 
   // Create form state
   const [channel, setChannel] = useState<'bank' | 'wallet'>('bank');
-  const [accountNumber, setAccountNumber] = useState('0123984521');
-  const [selectedBank, setSelectedBank] = useState('Access Bank Plc');
+  const [accountNumber, setAccountNumber] = useState('');
+  const [selectedBank, setSelectedBank] = useState('Access Bank');
   const [amountStr, setAmountStr] = useState('50,000');
   const [narration, setNarration] = useState('Monthly rent');
-  const [recipientName, setRecipientName] = useState('ADEKUNLE OLUMIDE');
+  const [recipientName, setRecipientName] = useState('');
   const [scheduleMode, setScheduleMode] = useState<ScheduleMode>('end_of_month');
   const [customCadence, setCustomCadence] = useState<CustomCadence>('monthly');
   const [dayOfMonth, setDayOfMonth] = useState(28);
   const [everyNDays, setEveryNDays] = useState(14);
   const [pinOpen, setPinOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!banks.length) return;
+    if (!banks.some(b => b.name === selectedBank)) {
+      setSelectedBank(banks[0].name);
+    }
+  }, [banks, selectedBank]);
+
+  const selectedBankMeta = useMemo(
+    () => banks.find(b => b.name === selectedBank) ?? null,
+    [banks, selectedBank]
+  );
+
+  useEffect(() => {
+    if (view !== 'create' || channel !== 'bank') return;
+    const acct = accountNumber.replace(/\D/g, '');
+    if (acct.length !== 10 || !selectedBankMeta?.code) return;
+
+    const seq = ++nameEnquirySeq.current;
+    setNameLoading(true);
+    setRecipientName('');
+
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const result = await apiNameEnquiry({
+            accountNumber: acct,
+            bankCode: selectedBankMeta.code,
+            bankName: selectedBankMeta.name,
+          });
+          if (seq !== nameEnquirySeq.current) return;
+          setRecipientName(result.accountName);
+        } catch (err) {
+          if (seq !== nameEnquirySeq.current) return;
+          setRecipientName('');
+          showToast(
+            'Name enquiry failed',
+            err instanceof ApiError ? err.message : 'Could not resolve account name.',
+            'warning'
+          );
+        } finally {
+          if (seq === nameEnquirySeq.current) setNameLoading(false);
+        }
+      })();
+    }, 350);
+
+    return () => window.clearTimeout(timer);
+  }, [accountNumber, selectedBankMeta, channel, view, showToast]);
 
   const fieldClass =
     'w-full h-12 px-4 rounded-2xl bg-black/[0.04] dark:bg-white/[0.06] border border-[var(--glass-border)] text-[var(--text)] text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]/25 transition-all placeholder:text-[var(--muted)]';
@@ -195,11 +247,12 @@ export const RecurringPaymentsScreen: React.FC = () => {
 
   const openCreate = () => {
     setChannel('bank');
-    setAccountNumber('0123984521');
-    setSelectedBank('Access Bank Plc');
+    setAccountNumber('');
+    setSelectedBank('Access Bank');
     setAmountStr('50,000');
     setNarration('Monthly rent');
-    setRecipientName('ADEKUNLE OLUMIDE');
+    setRecipientName('');
+    setNameLoading(false);
     setScheduleMode('end_of_month');
     setCustomCadence('monthly');
     setDayOfMonth(28);
@@ -210,8 +263,8 @@ export const RecurringPaymentsScreen: React.FC = () => {
   const handleSelectBeneficiary = (ben: (typeof INITIAL_BENEFICIARIES)[0]) => {
     setAccountNumber(ben.accountNumber);
     setSelectedBank(ben.bank);
-    setRecipientName(ben.name.toUpperCase());
-    showToast('Beneficiary Selected', `${ben.name} (${ben.bank}) loaded.`);
+    setRecipientName('');
+    showToast('Beneficiary Selected', `${ben.name} (${ben.bank}) — verifying name…`);
   };
 
   const handleProceed = () => {
@@ -222,6 +275,16 @@ export const RecurringPaymentsScreen: React.FC = () => {
     }
     if (channel === 'bank' && accountNumber.replace(/\D/g, '').length < 10) {
       showToast('Invalid Account', 'Enter a valid 10-digit account number.', 'warning');
+      return;
+    }
+    if (channel === 'bank' && (nameLoading || !recipientName.trim())) {
+      showToast(
+        'Name enquiry required',
+        nameLoading
+          ? 'Wait for the account name to resolve.'
+          : 'Account name could not be verified yet.',
+        'warning'
+      );
       return;
     }
     if (numericAmount > personalBalance) {
@@ -545,7 +608,11 @@ export const RecurringPaymentsScreen: React.FC = () => {
               onChange={e => {
                 const val = e.target.value.replace(/\D/g, '');
                 setAccountNumber(val);
-                if (val.length === 10) setRecipientName('ADEKUNLE OLUMIDE');
+                if (val.length !== 10) {
+                  nameEnquirySeq.current += 1;
+                  setNameLoading(false);
+                  setRecipientName('');
+                }
               }}
               placeholder="0000000000"
               type="text"
@@ -565,6 +632,11 @@ export const RecurringPaymentsScreen: React.FC = () => {
           <div className="space-y-1.5">
             <label className="block text-[10px] font-medium uppercase tracking-[0.22em] text-[var(--muted)]">
               Destination bank
+              {banksLoading
+                ? ' · loading…'
+                : banks.length
+                  ? ` · ${banks.length.toLocaleString()} from backend`
+                  : ''}
             </label>
             <div className="relative">
               <select
@@ -572,7 +644,7 @@ export const RecurringPaymentsScreen: React.FC = () => {
                 onChange={e => setSelectedBank(e.target.value)}
                 className={`${fieldClass} appearance-none pr-10 cursor-pointer`}
               >
-                {SUPPORTED_BANKS.map(bank => (
+                {banks.map(bank => (
                   <option key={bank.id} value={bank.name}>
                     {bank.name}
                   </option>
@@ -587,7 +659,14 @@ export const RecurringPaymentsScreen: React.FC = () => {
           </div>
         )}
 
-        {recipientName && (
+        {nameLoading && (
+          <div className="rounded-2xl border border-[var(--glass-border)] bg-black/[0.03] dark:bg-white/[0.04] px-3.5 py-2.5 flex items-center gap-2">
+            <Icon name="sync" size={16} className="text-[var(--accent)] shrink-0 animate-spin" />
+            <p className="text-[12px] text-[var(--muted)]">Resolving account name…</p>
+          </div>
+        )}
+
+        {recipientName && !nameLoading && (
           <div className="rounded-2xl border border-emerald-500/25 bg-emerald-500/10 px-3.5 py-2.5 flex items-center gap-2">
             <Icon name="verified" size={16} className="text-emerald-500 shrink-0" />
             <div className="min-w-0">
