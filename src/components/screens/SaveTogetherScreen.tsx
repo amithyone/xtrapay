@@ -1,11 +1,15 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useTransactions } from '../../context/TransactionContext';
-import { INITIAL_BENEFICIARIES } from '../../data/initialData';
+import { ApiError } from '../../lib/api';
+import { apiLookupUserByPhone } from '../../lib/xtrapayApi';
 import { Icon } from '../Icon';
 import { PinSheetModal } from '../common/PinSheetModal';
 
 type FilterType = 'all' | 'pending' | 'active' | 'declined';
 type CreateStep = 'members' | 'target' | 'review';
+
+/** Soft live sync while Save Together is open — one GET /pots, paused when tab hidden. */
+const POTS_LIVE_POLL_MS = 20_000;
 
 const fieldClass =
   'w-full h-12 px-4 rounded-2xl bg-black/[0.04] dark:bg-white/[0.06] border border-[var(--glass-border)] text-[var(--text)] text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]/25 transition-all placeholder:text-[var(--muted)]';
@@ -23,6 +27,8 @@ export const SaveTogetherScreen: React.FC = () => {
     contributeToPot,
     acceptPotInvite,
     declinePotInvite,
+    refreshPots,
+    accountFullName,
     navigateBack,
     showToast,
   } = useTransactions();
@@ -34,16 +40,40 @@ export const SaveTogetherScreen: React.FC = () => {
   const [isPinOpen, setIsPinOpen] = useState<boolean>(false);
   const [isCreateOpen, setIsCreateOpen] = useState<boolean>(false);
   const [createStep, setCreateStep] = useState<CreateStep>('members');
-  const [newTitle, setNewTitle] = useState<string>('Japan Summer Trip 2027');
-  const [newSubtitle, setNewSubtitle] = useState<string>('Shared travel & flight savings');
-  const [newTargetStr, setNewTargetStr] = useState<string>('1,500,000');
+  const [newTitle, setNewTitle] = useState<string>('');
+  const [newSubtitle, setNewSubtitle] = useState<string>('');
+  const [newTargetStr, setNewTargetStr] = useState<string>('100,000');
   const [newFrequency, setNewFrequency] = useState<string>('Monthly');
-  const [selectedMembers, setSelectedMembers] = useState<Array<{ name: string; phone: string }>>([
-    { name: 'Sarah Williams', phone: '0802 334 1120' },
-    { name: 'David Adeleke', phone: '0805 119 2240' },
-  ]);
+  const [selectedMembers, setSelectedMembers] = useState<
+    Array<{ name: string; phone: string; hasApp?: boolean }>
+  >([]);
   const [manualPhoneInput, setManualPhoneInput] = useState<string>('');
-  const [manualNameInput, setManualNameInput] = useState<string>('');
+  const [addingMember, setAddingMember] = useState(false);
+
+  const refreshPotsRef = useRef(refreshPots);
+  refreshPotsRef.current = refreshPots;
+
+  // Live pot progress from GET /pots: on open, when app returns, soft poll while visible.
+  useEffect(() => {
+    void refreshPotsRef.current();
+
+    const syncIfVisible = () => {
+      if (document.visibilityState === 'visible') void refreshPotsRef.current();
+    };
+
+    document.addEventListener('visibilitychange', syncIfVisible);
+    window.addEventListener('focus', syncIfVisible);
+
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void refreshPotsRef.current();
+    }, POTS_LIVE_POLL_MS);
+
+    return () => {
+      document.removeEventListener('visibilitychange', syncIfVisible);
+      window.removeEventListener('focus', syncIfVisible);
+      window.clearInterval(timer);
+    };
+  }, []);
 
   const activePot = groupPots.find(p => p.id === selectedPotId);
 
@@ -55,21 +85,56 @@ export const SaveTogetherScreen: React.FC = () => {
     return true;
   });
 
-  const handleAddMember = (name: string, phone: string) => {
-    if (selectedMembers.some(m => m.phone === phone)) {
-      showToast('Already Added', `${name} is already in the list.`, 'info');
+  const handleAddMemberByPhone = async () => {
+    const phone = manualPhoneInput.replace(/\s+/g, '');
+    const digits = phone.replace(/\D/g, '');
+    if (digits.length < 10) {
+      showToast('Phone required', 'Enter a valid Nigerian phone number (at least 10 digits).', 'warning');
       return;
     }
-    setSelectedMembers(prev => [...prev, { name, phone }]);
-    setManualNameInput('');
-    setManualPhoneInput('');
+    if (selectedMembers.some(m => m.phone.replace(/\D/g, '') === digits)) {
+      showToast('Already added', 'This phone is already on the invite list.', 'info');
+      return;
+    }
+
+    setAddingMember(true);
+    try {
+      let name = phone;
+      let hasApp = false;
+      try {
+        const lookup = await apiLookupUserByPhone(phone);
+        if (lookup.found && lookup.fullName?.trim()) {
+          name = lookup.fullName.trim();
+          hasApp = true;
+        }
+      } catch (err) {
+        // Soft-fail: still allow invite by phone if lookup is unavailable.
+        if (err instanceof ApiError && err.status !== 404) {
+          showToast('Lookup failed', err.message, 'warning');
+        }
+      }
+
+      setSelectedMembers(prev => [...prev, { name, phone, hasApp }]);
+      setManualPhoneInput('');
+      if (hasApp) {
+        showToast('Member found', `${name} has Xtrapay — invited.`, 'success');
+      } else {
+        showToast(
+          'Invite added',
+          'Phone added. Their name will appear when they join Xtrapay.',
+          'info'
+        );
+      }
+    } finally {
+      setAddingMember(false);
+    }
   };
 
   const handleRemoveMember = (phone: string) => {
     setSelectedMembers(prev => prev.filter(m => m.phone !== phone));
   };
 
-  const handleConfirmCreatePot = () => {
+  const handleConfirmCreatePot = async () => {
     const numericTarget = parseFloat(newTargetStr.replace(/,/g, ''));
     if (isNaN(numericTarget) || numericTarget <= 0) {
       showToast('Invalid Target', 'Please enter a target amount.', 'warning');
@@ -79,17 +144,28 @@ export const SaveTogetherScreen: React.FC = () => {
       showToast('Title Required', 'Give your savings pot a name.', 'warning');
       return;
     }
+    if (selectedMembers.length < 1) {
+      showToast('Add a member', 'Invite at least one person to create a group pot.', 'warning');
+      setCreateStep('members');
+      return;
+    }
 
-    createGroupPot({
-      title: newTitle,
-      subtitle: newSubtitle,
+    const ok = await createGroupPot({
+      title: newTitle.trim(),
+      subtitle: newSubtitle.trim() || undefined,
       targetAmount: numericTarget,
       frequency: newFrequency,
       members: selectedMembers,
     });
 
-    setIsCreateOpen(false);
-    setCreateStep('members');
+    if (ok) {
+      setIsCreateOpen(false);
+      setCreateStep('members');
+      setSelectedMembers([]);
+      setNewTitle('');
+      setNewSubtitle('');
+      setManualPhoneInput('');
+    }
   };
 
   const handleTriggerContribute = () => {
@@ -97,16 +173,17 @@ export const SaveTogetherScreen: React.FC = () => {
     setIsPinOpen(true);
   };
 
-  const handleContributePinSuccess = (pin: string) => {
+  const handleContributePinSuccess = async (pin: string) => {
     if (selectedPotId) {
       const amount = parseFloat(contributeAmountStr.replace(/,/g, ''));
-      const ok = contributeToPot(selectedPotId, amount, pin);
+      const ok = await contributeToPot(selectedPotId, amount, pin);
       if (ok) {
         setIsPinOpen(false);
       }
     }
   };
 
+  const youLabel = accountFullName.trim() || 'You';
   const totalMemberCount = selectedMembers.length + 1;
   const targetNum = parseFloat(newTargetStr.replace(/,/g, '')) || 0;
   const perPersonShare = Math.round(targetNum / Math.max(1, totalMemberCount));
@@ -303,14 +380,14 @@ export const SaveTogetherScreen: React.FC = () => {
                 <div className="flex items-center gap-2 pt-1">
                   <button
                     type="button"
-                    onClick={() => acceptPotInvite(activePot.id)}
+                    onClick={() => void acceptPotInvite(activePot.id)}
                     className="flex-1 h-11 rounded-2xl bg-[var(--accent)] text-white text-[12px] font-semibold active:scale-[0.98] transition-transform"
                   >
                     Accept Invite
                   </button>
                   <button
                     type="button"
-                    onClick={() => declinePotInvite(activePot.id)}
+                    onClick={() => void declinePotInvite(activePot.id)}
                     className="h-11 px-4 rounded-2xl glass-chip !rounded-2xl text-[12px] font-semibold text-rose-600 dark:text-rose-400"
                   >
                     Decline
@@ -567,7 +644,7 @@ export const SaveTogetherScreen: React.FC = () => {
                       You
                     </span>
                     <span className="text-[var(--text)] font-semibold truncate">
-                      Tunde Bakare (Creator)
+                      {youLabel} (Creator)
                     </span>
                   </div>
                   <span className="text-[10px] text-[var(--accent)] font-mono shrink-0">Included</span>
@@ -576,52 +653,94 @@ export const SaveTogetherScreen: React.FC = () => {
                 <div className="space-y-1.5">
                   <span className="text-[10px] text-[var(--muted)] uppercase tracking-[0.22em] font-medium">
                     Invited Members ({selectedMembers.length})
+                    <span className="text-rose-500 normal-case tracking-normal"> · required</span>
                   </span>
                   <div className="space-y-2 max-h-32 overflow-y-auto">
-                    {selectedMembers.map(m => (
-                      <div
-                        key={m.phone}
-                        className="p-3 rounded-2xl border border-[var(--glass-border)] bg-black/[0.03] dark:bg-white/[0.05] flex items-center justify-between gap-2 text-[12px]"
-                      >
-                        <div className="min-w-0">
-                          <p className="text-[var(--text)] font-semibold truncate">{m.name}</p>
-                          <p className="text-[10px] text-[var(--muted)]">{m.phone}</p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveMember(m.phone)}
-                          className="frosted-pad !h-8 !w-8 !min-h-8 !min-w-8 !rounded-full text-rose-600 dark:text-rose-400 shrink-0"
-                          aria-label={`Remove ${m.name}`}
+                    {selectedMembers.length === 0 ? (
+                      <p className="text-[12px] text-[var(--muted)] px-0.5">
+                        Add at least one member by phone to continue.
+                      </p>
+                    ) : (
+                      selectedMembers.map(m => (
+                        <div
+                          key={m.phone}
+                          className="p-3 rounded-2xl border border-[var(--glass-border)] bg-black/[0.03] dark:bg-white/[0.05] flex items-center justify-between gap-2 text-[12px]"
                         >
-                          <Icon name="close" size={14} />
-                        </button>
-                      </div>
-                    ))}
+                          <div className="min-w-0">
+                            <p className="text-[var(--text)] font-semibold truncate">
+                              {m.hasApp ? m.name : m.phone}
+                            </p>
+                            <p className="text-[10px] text-[var(--muted)]">
+                              {m.hasApp ? m.phone : 'Invite pending · name shows when they have the app'}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveMember(m.phone)}
+                            className="frosted-pad !h-8 !w-8 !min-h-8 !min-w-8 !rounded-full text-rose-600 dark:text-rose-400 shrink-0"
+                            aria-label={`Remove ${m.name}`}
+                          >
+                            <Icon name="close" size={14} />
+                          </button>
+                        </div>
+                      ))
+                    )}
                   </div>
                 </div>
 
-                <div className="space-y-1.5">
+                <div className="space-y-2 rounded-2xl border border-[var(--glass-border)] bg-black/[0.03] dark:bg-white/[0.05] p-3.5">
                   <span className="text-[10px] text-[var(--muted)] uppercase tracking-[0.22em] font-medium">
-                    Add from Beneficiaries
+                    Add member by phone
                   </span>
-                  <div className="flex items-center gap-2 overflow-x-auto no-scrollbar py-1">
-                    {INITIAL_BENEFICIARIES.map(ben => (
-                      <button
-                        key={ben.id}
-                        type="button"
-                        onClick={() => handleAddMember(ben.name, ben.accountNumber)}
-                        className="glass-chip !rounded-2xl shrink-0 flex items-center gap-1 px-2.5 py-2 text-[12px] text-[var(--text)] active:scale-[0.98]"
-                      >
-                        <Icon name="add" size={12} className="text-[var(--accent)]" />
-                        <span>{ben.name.split(' ')[0]}</span>
-                      </button>
-                    ))}
+                  <p className="text-[11px] text-[var(--muted)] leading-snug">
+                    Only a phone number is needed. If they already use Xtrapay, their name appears
+                    automatically.
+                  </p>
+                  <div className="flex gap-2">
+                    <input
+                      type="tel"
+                      inputMode="tel"
+                      value={manualPhoneInput}
+                      onChange={e => setManualPhoneInput(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          void handleAddMemberByPhone();
+                        }
+                      }}
+                      placeholder="0803 412 9981"
+                      className={`${fieldClass} !h-11 text-[13px] font-mono flex-1`}
+                      autoComplete="tel"
+                    />
+                    <button
+                      type="button"
+                      disabled={addingMember}
+                      onClick={() => void handleAddMemberByPhone()}
+                      className="shrink-0 h-11 px-4 rounded-2xl bg-[var(--accent)] text-white text-[13px] font-semibold flex items-center gap-1 disabled:opacity-60 active:scale-[0.98]"
+                    >
+                      <Icon name="add" size={16} />
+                      {addingMember ? '…' : 'Add'}
+                    </button>
                   </div>
                 </div>
 
                 <button
                   type="button"
-                  onClick={() => setCreateStep('target')}
+                  onClick={() => {
+                    if (selectedMembers.length < 1) {
+                      showToast(
+                        'Add a member',
+                        'Invite at least one person before setting the target.',
+                        'warning'
+                      );
+                      return;
+                    }
+                    if (!newTitle.trim()) {
+                      showToast('Title required', 'Give your savings pot a name.', 'warning');
+                      return;
+                    }
+                    setCreateStep('target');
+                  }}
                   className="w-full h-12 rounded-2xl bg-[var(--accent)] text-white text-[13px] font-semibold flex items-center justify-center gap-1 shadow-lg shadow-[var(--accent)]/25 active:scale-[0.98] transition-transform"
                 >
                   Next: Set Target
@@ -743,7 +862,7 @@ export const SaveTogetherScreen: React.FC = () => {
                   </button>
                   <button
                     type="button"
-                    onClick={handleConfirmCreatePot}
+                    onClick={() => void handleConfirmCreatePot()}
                     className="flex-1 h-11 rounded-2xl bg-[var(--accent)] text-white text-[12px] font-semibold flex items-center justify-center gap-1 shadow-lg shadow-[var(--accent)]/25 active:scale-[0.98] transition-transform"
                   >
                     <Icon name="check" size={16} />

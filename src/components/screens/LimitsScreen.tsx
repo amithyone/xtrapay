@@ -6,13 +6,22 @@ import { PinSheetModal } from '../common/PinSheetModal';
 const money = (n: number) =>
   `₦${n.toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
 
+const kycLabel = (status: string) => {
+  const s = status.toLowerCase();
+  if (s === 'verified') return 'KYC verified';
+  if (s === 'pending') return 'KYC pending';
+  if (s === 'rejected') return 'KYC rejected';
+  return 'KYC incomplete';
+};
+
 type LimitKey = 'daily' | 'single' | 'pos' | 'transfer';
 
 /**
  * Limit settings — daily, single debit, POS float, and transfer caps.
  */
 export const LimitsScreen: React.FC = () => {
-  const { dailySpent, dailyLimit, overdraftLimit, showToast } = useTransactions();
+  const { dailySpent, dailyLimit, overdraftLimit, accountTier, kycStatus, showToast } =
+    useTransactions();
   const limitLeft = Math.max(0, dailyLimit - dailySpent);
 
   const [daily, setDaily] = useState(dailyLimit);
@@ -84,7 +93,8 @@ export const LimitsScreen: React.FC = () => {
           Limit settings
         </h1>
         <p className="mt-2 text-[11px] text-[var(--muted)]">
-          Tier 3 KYC · Overdraft line {money(overdraftLimit)}. Changes require transaction PIN.
+          {accountTier} · {kycLabel(kycStatus)} · Overdraft line {money(overdraftLimit)}. Changes
+          require transaction PIN.
         </p>
       </header>
 

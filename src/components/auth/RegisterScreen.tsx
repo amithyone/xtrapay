@@ -14,6 +14,11 @@ interface RegisterScreenProps {
   onContinue: (payload: RegisterBasicPayload) => void;
 }
 
+/** One word only — strips spaces and other whitespace as the user types. */
+const oneWord = (value: string) => value.replace(/\s+/g, '');
+
+const isOneWord = (value: string) => value.length > 0 && !/\s/.test(value);
+
 /**
  * Registration step 1 — basic account details.
  */
@@ -24,16 +29,25 @@ export const RegisterScreen: React.FC<RegisterScreenProps> = ({ onBack, onContin
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [accepted, setAccepted] = useState(false);
   const [error, setError] = useState('');
 
   const submit = () => {
-    const first = firstName.trim();
-    const middle = middleName.trim();
-    const last = lastName.trim();
+    const first = oneWord(firstName);
+    const middle = oneWord(middleName);
+    const last = oneWord(lastName);
     if (!first || !last || !phone.trim() || !email.trim() || password.length < 6) {
       setError('Enter first and last name, phone, email, and a password (min 6 characters).');
+      return;
+    }
+    if (!isOneWord(first) || !isOneWord(last) || (middle && !isOneWord(middle))) {
+      setError('First, middle, and last name must each be a single word.');
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError('Passwords do not match.');
       return;
     }
     if (!accepted) {
@@ -60,22 +74,22 @@ export const RegisterScreen: React.FC<RegisterScreenProps> = ({ onBack, onContin
       <input
         className={authFieldClass}
         value={firstName}
-        onChange={e => setFirstName(e.target.value)}
-        placeholder="First name"
+        onChange={e => setFirstName(oneWord(e.target.value))}
+        placeholder="First name (one word)"
         autoComplete="given-name"
       />
       <input
         className={authFieldClass}
         value={middleName}
-        onChange={e => setMiddleName(e.target.value)}
-        placeholder="Middle name (optional)"
+        onChange={e => setMiddleName(oneWord(e.target.value))}
+        placeholder="Middle name (optional, one word)"
         autoComplete="additional-name"
       />
       <input
         className={authFieldClass}
         value={lastName}
-        onChange={e => setLastName(e.target.value)}
-        placeholder="Last name"
+        onChange={e => setLastName(oneWord(e.target.value))}
+        placeholder="Last name (one word)"
         autoComplete="family-name"
       />
       <input
@@ -101,6 +115,24 @@ export const RegisterScreen: React.FC<RegisterScreenProps> = ({ onBack, onContin
           value={password}
           onChange={e => setPassword(e.target.value)}
           placeholder="Create password"
+          autoComplete="new-password"
+        />
+        <button
+          type="button"
+          onClick={() => setShowPassword(v => !v)}
+          className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--muted)]"
+          aria-label={showPassword ? 'Hide password' : 'Show password'}
+        >
+          <Icon name={showPassword ? 'visibility_off' : 'visibility'} size={18} />
+        </button>
+      </div>
+      <div className="relative">
+        <input
+          className={`${authFieldClass} pr-12`}
+          type={showPassword ? 'text' : 'password'}
+          value={confirmPassword}
+          onChange={e => setConfirmPassword(e.target.value)}
+          placeholder="Confirm password"
           autoComplete="new-password"
         />
         <button

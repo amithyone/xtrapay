@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
 import { useTransactions } from '../../context/TransactionContext';
-import { ApiError } from '../../lib/api';
+import { ApiError, getAccessToken } from '../../lib/api';
 import {
   apiForgotPassword,
   apiLogin,
   apiRegister,
   apiResetPassword,
   apiSendOtp,
+  apiSetPin,
   apiSubmitKyc,
   apiVerifyOtp,
 } from '../../lib/xtrapayApi';
@@ -17,6 +18,7 @@ import { KycRegisterScreen, type RegisterKycPayload } from './KycRegisterScreen'
 import { ForgotPasswordScreen } from './ForgotPasswordScreen';
 import { OtpScreen } from './OtpScreen';
 import { ResetPasswordScreen } from './ResetPasswordScreen';
+import { SetPinScreen } from './SetPinScreen';
 import { CheckoutNowScreen } from '../screens/CheckoutNowScreen';
 
 type AuthStep =
@@ -26,6 +28,7 @@ type AuthStep =
   | 'register_kyc'
   | 'forgot'
   | 'otp'
+  | 'set_pin'
   | 'reset_password'
   | 'checkoutnow';
 
@@ -38,7 +41,7 @@ function errMessage(err: unknown, fallback: string) {
 }
 
 /**
- * Full auth gate — intro, login, register (basic → KYC), forgot, OTP, reset.
+ * Full auth gate — intro, login, register (basic → KYC → OTP → PIN), forgot, reset.
  */
 export const AuthFlow: React.FC = () => {
   const { hasSeenIntro, completeIntro, establishSession, showToast } = useTransactions();
@@ -103,7 +106,6 @@ export const AuthFlow: React.FC = () => {
         );
         return false;
       }
-      // Send the same purpose OTP to both channels; user verifies with phone OTP screen.
       const [phoneOtp] = await Promise.all([
         apiSendOtp(phone, 'register'),
         apiSendOtp(email, 'register'),
@@ -226,18 +228,45 @@ export const AuthFlow: React.FC = () => {
               code,
               registrationId: registrationId ?? undefined,
             });
+            if (otpPurpose === 'register' || session.user?.pinSet === false) {
+              // Token is stored; finish into hub only after PIN is created.
+              setStep('set_pin');
+              showToast(
+                'Account verified',
+                'Create your 4-digit transaction PIN to continue.',
+                'success'
+              );
+              return;
+            }
             await establishSession(session.accessToken);
-            showToast(
-              otpPurpose === 'register' ? 'Account verified' : 'Signed in',
-              otpPurpose === 'register'
-                ? 'Your Xtrapay account is ready with KYC submitted.'
-                : 'Welcome back to Xtrapay.',
-              'success'
-            );
+            showToast('Signed in', 'Welcome back to Xtrapay.', 'success');
           } catch (err) {
             showToast('Invalid code', errMessage(err, 'OTP verification failed.'), 'warning');
           } finally {
             setBusy(false);
+          }
+        }}
+      />
+    );
+  }
+
+  if (step === 'set_pin') {
+    return (
+      <SetPinScreen
+        onSave={async pin => {
+          try {
+            await apiSetPin({ pin, confirmPin: pin });
+            const token = getAccessToken();
+            if (!token) {
+              showToast('Session expired', 'Sign in again to continue.', 'warning');
+              setStep('login');
+              return;
+            }
+            await establishSession(token);
+            showToast('PIN saved', 'Your transaction PIN is active. Welcome to Xtrapay.', 'success');
+          } catch (err) {
+            showToast('PIN failed', errMessage(err, 'Could not save transaction PIN.'), 'warning');
+            throw err;
           }
         }}
       />
@@ -275,12 +304,18 @@ export const AuthFlow: React.FC = () => {
 
   return (
     <LoginScreen
+      loading={busy}
       onBack={hasSeenIntro ? undefined : () => setStep('intro')}
       onLogin={async ({ identifier, password }) => {
         if (busy) return;
         setBusy(true);
         try {
           const session = await apiLogin(identifier, password);
+          if (session.user?.pinSet === false) {
+            setStep('set_pin');
+            showToast('Set your PIN', 'Create a 4-digit transaction PIN to continue.', 'info');
+            return;
+          }
           await establishSession(session.accessToken);
           showToast('Signed in', 'Welcome back to Xtrapay.', 'success');
         } catch (err) {

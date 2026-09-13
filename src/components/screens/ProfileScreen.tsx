@@ -1,7 +1,14 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useTransactions } from '../../context/TransactionContext';
+import { ApiError } from '../../lib/api';
+import {
+  apiConfirmPinChange,
+  apiForgotPassword,
+  apiRequestPinChange,
+} from '../../lib/xtrapayApi';
 import { Icon } from '../Icon';
 import { PinSheetModal } from '../common/PinSheetModal';
+import { ChangePinModal } from '../auth/ChangePinModal';
 
 type SheetKind =
   | null
@@ -14,81 +21,172 @@ type SheetKind =
   | 'bvn'
   | 'nin';
 
+function initialsFromName(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return '—';
+  return parts
+    .slice(0, 2)
+    .map(p => p[0]?.toUpperCase() ?? '')
+    .join('');
+}
+
+function formatDob(isoOrDisplay: string): string {
+  if (!isoOrDisplay) return '—';
+  const d = new Date(isoOrDisplay);
+  if (Number.isNaN(d.getTime())) return isoOrDisplay;
+  return d.toLocaleDateString('en-NG', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function formatPasswordChanged(isoOrDisplay: string): string {
+  if (!isoOrDisplay) return 'Manage password';
+  const d = new Date(isoOrDisplay);
+  if (Number.isNaN(d.getTime())) return isoOrDisplay;
+  return `Last changed ${d.toLocaleDateString('en-NG', { day: 'numeric', month: 'short', year: 'numeric' })}`;
+}
+
+function timeoutLabel(min: number): string {
+  if (min <= 0) return 'Never';
+  if (min === 1) return '1 min';
+  return `${min} min`;
+}
+
+function timeoutMinutes(label: string): number {
+  if (label === 'Never') return 0;
+  const n = parseInt(label, 10);
+  return Number.isFinite(n) ? n : 5;
+}
+
 /**
- * Full profile & settings — typical Nigerian fintech agent/customer account centre.
+ * Full profile & settings — live from GET/PATCH /me.
  */
 export const ProfileScreen: React.FC = () => {
-  const { accountContext, showToast, theme, toggleTheme, logout, setActiveScreen } =
-    useTransactions();
+  const {
+    accountContext,
+    accountTier,
+    kycStatus,
+    userProfile,
+    refreshProfile,
+    updateProfile,
+    deleteAccount,
+    showToast,
+    theme,
+    toggleTheme,
+    logout,
+    setActiveScreen,
+  } = useTransactions();
   const isLight = theme === 'light';
-
-  const [fullName, setFullName] = useState('Innocent Solomon');
-  const [email, setEmail] = useState('innocent.solomon@xtrapay.ng');
-  const [phone, setPhone] = useState('+234 803 412 9981');
-  const [address, setAddress] = useState('12 Admiralty Way, Lekki Phase 1, Lagos');
-  const [bvn, setBvn] = useState('221*****8841');
-  const [nin, setNin] = useState('123*******9012');
-  const [tier] = useState('Tier 3');
-  const [dob] = useState('14 Mar 1992');
-
-  const [biometrics, setBiometrics] = useState(true);
-  const [faceId, setFaceId] = useState(true);
-  const [transactionPinRequired, setTransactionPinRequired] = useState(true);
-  const [sessionTimeout, setSessionTimeout] = useState('5 min');
-
-  const [pushNotif, setPushNotif] = useState(true);
-  const [smsNotif, setSmsNotif] = useState(true);
-  const [emailNotif, setEmailNotif] = useState(false);
-  const [txnAlerts, setTxnAlerts] = useState(true);
-  const [promoNotif, setPromoNotif] = useState(false);
-  const [loginAlerts, setLoginAlerts] = useState(true);
 
   const [sheet, setSheet] = useState<SheetKind>(null);
   const [draft, setDraft] = useState('');
+  const [saving, setSaving] = useState(false);
   const [passwordPinOpen, setPasswordPinOpen] = useState(false);
   const [pinChangeOpen, setPinChangeOpen] = useState(false);
+  const [pinChangeCurrent, setPinChangeCurrent] = useState('');
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState('');
+  const [deleting, setDeleting] = useState(false);
+
+  const refreshRef = useRef(refreshProfile);
+  refreshRef.current = refreshProfile;
+
+  useEffect(() => {
+    void refreshRef.current();
+  }, []);
+
+  const fullName = userProfile?.fullName || '';
+  const email = userProfile?.email || '';
+  const phone = userProfile?.phone || '';
+  const address = userProfile?.address || '';
+  const dob = formatDob(userProfile?.dateOfBirth || '');
+  const bvn = userProfile?.kyc.bvnMasked || 'Not linked';
+  const nin = userProfile?.kyc.ninMasked || 'Not linked';
+  const customerId = userProfile?.customerId || userProfile?.agent?.code || '';
+  const linkedBanks =
+    userProfile?.linkedBanks?.length
+      ? userProfile.linkedBanks.join(' · ')
+      : 'No linked banks yet';
+  const agentLabel = userProfile?.agent
+    ? `${userProfile.agent.active ? 'Active' : 'Inactive'}${
+        userProfile.agent.code ? ` · ${userProfile.agent.code}` : ''
+      }`
+    : customerId
+      ? `Customer · ${customerId}`
+      : 'Not enrolled';
+
+  const prefs = userProfile?.preferences;
+  const biometrics = prefs?.biometrics ?? true;
+  const faceId = prefs?.faceId ?? true;
+  const transactionPinRequired = prefs?.requirePinAlways ?? true;
+  const sessionTimeout = timeoutLabel(prefs?.sessionTimeoutMin ?? 5);
+  const pushNotif = prefs?.push ?? true;
+  const smsNotif = prefs?.sms ?? true;
+  const emailNotif = prefs?.emailNotif ?? false;
+  const txnAlerts = prefs?.txnAlerts ?? true;
+  const promoNotif = prefs?.promo ?? false;
+  const loginAlerts = prefs?.loginAlerts ?? true;
 
   const openEdit = (kind: SheetKind, value: string) => {
-    setDraft(value);
+    setDraft(value === 'Not linked' || value === '—' ? '' : value);
     setSheet(kind);
   };
 
-  const saveEdit = () => {
+  const patchPrefs = async (partial: Partial<NonNullable<typeof prefs>>) => {
+    const ok = await updateProfile({ preferences: partial });
+    if (ok) showToast('Preferences saved', 'Your settings were updated.', 'success');
+  };
+
+  const saveEdit = async () => {
     if (!sheet) return;
     const v = draft.trim();
     if (!v) {
       showToast('Required', 'This field cannot be empty.', 'warning');
       return;
     }
-    if (sheet === 'name') setFullName(v);
-    if (sheet === 'email') setEmail(v);
-    if (sheet === 'phone') setPhone(v);
-    if (sheet === 'address') setAddress(v);
-    if (sheet === 'bvn') setBvn(v);
-    if (sheet === 'nin') setNin(v);
-    showToast('Profile Updated', 'Your changes have been saved.', 'success');
-    setSheet(null);
+    setSaving(true);
+    try {
+      let ok = false;
+      if (sheet === 'name') ok = await updateProfile({ fullName: v });
+      else if (sheet === 'email') ok = await updateProfile({ email: v });
+      else if (sheet === 'phone') ok = await updateProfile({ phone: v });
+      else if (sheet === 'address') ok = await updateProfile({ address: v });
+      else if (sheet === 'bvn') ok = await updateProfile({ kyc: { bvn: v } });
+      else if (sheet === 'nin') ok = await updateProfile({ kyc: { nin: v } });
+      if (ok) {
+        showToast('Profile Updated', 'Your changes have been saved.', 'success');
+        setSheet(null);
+      }
+    } finally {
+      setSaving(false);
+    }
   };
+
+  const kycLabel =
+    kycStatus === 'verified'
+      ? 'Verified'
+      : kycStatus === 'pending'
+        ? 'Pending KYC'
+        : 'Unverified';
 
   return (
     <main className="flex-1 min-w-0 px-5 pt-5 pb-32 space-y-4" id="profile-screen">
       {/* Hero identity */}
       <section className="glass-card glass-strong settings-list !rounded-[28px] px-5 py-5 text-center space-y-3">
         <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-[var(--accent)]/15 text-[var(--accent)] text-[22px] font-bold border border-[var(--accent)]/25">
-          JD
+          {initialsFromName(fullName)}
         </div>
         <div>
-          <h1 className="text-[18px] font-semibold text-[var(--text)] tracking-tight">{fullName}</h1>
-          <p className="mt-1 text-[12px] text-[var(--muted)]">{phone}</p>
+          <h1 className="text-[18px] font-semibold text-[var(--text)] tracking-tight">
+            {fullName || 'Your profile'}
+          </h1>
+          <p className="mt-1 text-[12px] text-[var(--muted)]">{phone || '—'}</p>
           <div className="mt-2.5 inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-500">
             <Icon name="verified" size={12} />
-            {tier} · {accountContext === 'personal' ? 'Personal' : 'Business'} · Verified
+            {accountTier} · {accountContext === 'personal' ? 'Personal' : 'Business'} · {kycLabel}
           </div>
         </div>
         <p className="text-[11px] text-[var(--muted)]">
-          CBN licensed · NDIC insured · Customer ID AG-1003925
+          CBN licensed · NDIC insured
+          {customerId ? ` · Customer ID ${customerId}` : ''}
         </p>
       </section>
 
@@ -97,26 +195,26 @@ export const ProfileScreen: React.FC = () => {
         <Row
           icon="contact_page"
           label="Full name"
-          value={fullName}
+          value={fullName || '—'}
           onClick={() => openEdit('name', fullName)}
         />
         <Row
           icon="chat"
           label="Email"
-          value={email}
+          value={email || '—'}
           onClick={() => openEdit('email', email)}
         />
         <Row
           icon="smartphone"
           label="Phone number"
-          value={phone}
+          value={phone || '—'}
           onClick={() => openEdit('phone', phone)}
         />
         <Row icon="schedule" label="Date of birth" value={dob} />
         <Row
           icon="location_on"
           label="Residential address"
-          value={address}
+          value={address || '—'}
           onClick={() => openEdit('address', address)}
         />
       </Section>
@@ -137,12 +235,20 @@ export const ProfileScreen: React.FC = () => {
           hint="National Identification Number"
           onClick={() => openEdit('nin', nin)}
         />
-        <Row icon="insights" label="Account tier" value={`${tier} · Higher limits unlocked`} />
+        <Row
+          icon="insights"
+          label="Account tier"
+          value={`${accountTier} · ${
+            kycStatus === 'verified' ? 'Higher limits unlocked' : 'Complete KYC to raise limits'
+          }`}
+        />
         <Row
           icon="account_balance"
           label="Linked banks"
-          value="Zenith · Providus · Rubies MFB"
-          onClick={() => showToast('Linked Banks', 'Manage settlement rails from account settings.', 'info')}
+          value={linkedBanks}
+          onClick={() =>
+            showToast('Linked Banks', 'Settlement rails come from your verified accounts.', 'info')
+          }
         />
       </Section>
 
@@ -151,7 +257,7 @@ export const ProfileScreen: React.FC = () => {
         <Row
           icon="lock"
           label="Reset login password"
-          value="Last changed 22 Aug 2026"
+          value={formatPasswordChanged(userProfile?.passwordChangedAt || '')}
           onClick={() => setPasswordPinOpen(true)}
         />
         <Row
@@ -165,7 +271,7 @@ export const ProfileScreen: React.FC = () => {
           label="Biometric login"
           hint="Use fingerprint to unlock the app"
           checked={biometrics}
-          onChange={setBiometrics}
+          onChange={v => void patchPrefs({ biometrics: v })}
           isLight={isLight}
         />
         <ToggleRow
@@ -173,7 +279,7 @@ export const ProfileScreen: React.FC = () => {
           label="Face ID / Face unlock"
           hint="Authorize transfers with face biometrics"
           checked={faceId}
-          onChange={setFaceId}
+          onChange={v => void patchPrefs({ faceId: v })}
           isLight={isLight}
         />
         <ToggleRow
@@ -181,7 +287,7 @@ export const ProfileScreen: React.FC = () => {
           label="Always require PIN"
           hint="Ask for PIN on every money movement"
           checked={transactionPinRequired}
-          onChange={setTransactionPinRequired}
+          onChange={v => void patchPrefs({ requirePinAlways: v })}
           isLight={isLight}
         />
         <div className="px-3.5 py-3.5">
@@ -199,10 +305,7 @@ export const ProfileScreen: React.FC = () => {
               <button
                 key={opt}
                 type="button"
-                onClick={() => {
-                  setSessionTimeout(opt);
-                  showToast('Auto-lock Updated', `Session locks after ${opt}.`, 'info');
-                }}
+                onClick={() => void patchPrefs({ sessionTimeoutMin: timeoutMinutes(opt) })}
                 className={`settings-chip h-9 rounded-xl text-[12px] font-semibold border transition-colors ${
                   sessionTimeout === opt
                     ? 'bg-[var(--accent)] text-white border-[var(--accent)]'
@@ -222,7 +325,7 @@ export const ProfileScreen: React.FC = () => {
           icon="notifications"
           label="Push notifications"
           checked={pushNotif}
-          onChange={setPushNotif}
+          onChange={v => void patchPrefs({ push: v })}
           isLight={isLight}
         />
         <ToggleRow
@@ -230,14 +333,14 @@ export const ProfileScreen: React.FC = () => {
           label="SMS alerts"
           hint="OTP and debit/credit SMS"
           checked={smsNotif}
-          onChange={setSmsNotif}
+          onChange={v => void patchPrefs({ sms: v })}
           isLight={isLight}
         />
         <ToggleRow
           icon="chat"
           label="Email alerts"
           checked={emailNotif}
-          onChange={setEmailNotif}
+          onChange={v => void patchPrefs({ emailNotif: v })}
           isLight={isLight}
         />
         <ToggleRow
@@ -245,21 +348,21 @@ export const ProfileScreen: React.FC = () => {
           label="Transaction alerts"
           hint="Instant notice on every debit or credit"
           checked={txnAlerts}
-          onChange={setTxnAlerts}
+          onChange={v => void patchPrefs({ txnAlerts: v })}
           isLight={isLight}
         />
         <ToggleRow
           icon="shield"
           label="Login & device alerts"
           checked={loginAlerts}
-          onChange={setLoginAlerts}
+          onChange={v => void patchPrefs({ loginAlerts: v })}
           isLight={isLight}
         />
         <ToggleRow
           icon="sparkles"
           label="Promotions & tips"
           checked={promoNotif}
-          onChange={setPromoNotif}
+          onChange={v => void patchPrefs({ promo: v })}
           isLight={isLight}
         />
       </Section>
@@ -275,20 +378,28 @@ export const ProfileScreen: React.FC = () => {
         <Row
           icon="home"
           label="Default language"
-          value="English (NG)"
+          value={prefs?.language === 'en-NG' || !prefs?.language ? 'English (NG)' : prefs.language}
           onClick={() => showToast('Language', 'English (NG) is your default language.', 'info')}
         />
         <Row
           icon="toll"
           label="Currency display"
-          value="NGN (₦)"
+          value={prefs?.currency === 'NGN' || !prefs?.currency ? 'NGN (₦)' : prefs.currency}
           onClick={() => showToast('Currency', 'All balances display in Nigerian Naira.', 'info')}
         />
         <Row
           icon="point_of_sale"
           label="Agent / POS profile"
-          value="Active · AG-1003925"
-          onClick={() => showToast('Agent Profile', 'Mapped to Lagos Island aggregator.', 'info')}
+          value={agentLabel}
+          onClick={() =>
+            showToast(
+              'Agent Profile',
+              userProfile?.agent?.aggregator
+                ? `Mapped to ${userProfile.agent.aggregator}.`
+                : 'Agent mapping comes from your account.',
+              'info'
+            )
+          }
         />
       </Section>
 
@@ -305,16 +416,8 @@ export const ProfileScreen: React.FC = () => {
           label="FAQs & help centre"
           onClick={() => showToast('Help Centre', 'Opening Xtrapay help articles.', 'info')}
         />
-        <Row
-          icon="file_text"
-          label="Terms of use"
-          onClick={() => setActiveScreen('terms')}
-        />
-        <Row
-          icon="shield"
-          label="Privacy policy"
-          onClick={() => setActiveScreen('privacy')}
-        />
+        <Row icon="file_text" label="Terms of use" onClick={() => setActiveScreen('terms')} />
+        <Row icon="shield" label="Privacy policy" onClick={() => setActiveScreen('privacy')} />
         <Row
           icon="account_balance"
           label="Licences"
@@ -353,7 +456,7 @@ export const ProfileScreen: React.FC = () => {
       </button>
 
       <p className="text-center text-[10px] text-[var(--muted)] pb-2">
-        Xtrapay · v1.1.0 · Build 2026.09.12
+        Xtrapay · v1.1.0
       </p>
 
       {/* Edit sheet */}
@@ -389,8 +492,13 @@ export const ProfileScreen: React.FC = () => {
                 type={sheet === 'email' ? 'email' : 'text'}
               />
             )}
-            <button type="button" onClick={saveEdit} className="glass-cta w-full">
-              Save changes
+            <button
+              type="button"
+              onClick={() => void saveEdit()}
+              disabled={saving}
+              className="glass-cta w-full disabled:opacity-60"
+            >
+              {saving ? 'Saving…' : 'Save changes'}
             </button>
           </div>
         </div>
@@ -401,24 +509,70 @@ export const ProfileScreen: React.FC = () => {
         onClose={() => setPasswordPinOpen(false)}
         title="Confirm Identity"
         subtitle="Enter your current PIN to reset login password"
-        onSuccess={() => {
+        onSuccess={async () => {
           setPasswordPinOpen(false);
-          showToast(
-            'Password Reset Link Sent',
-            `A secure reset link was sent to ${email}.`,
-            'success'
-          );
+          try {
+            const target = email || phone;
+            if (!target) {
+              showToast('Missing contact', 'Add an email or phone before resetting password.', 'warning');
+              return;
+            }
+            await apiForgotPassword(target);
+            showToast(
+              'Password Reset Sent',
+              `A secure reset code was sent to ${target}.`,
+              'success'
+            );
+          } catch (err) {
+            showToast(
+              'Reset failed',
+              err instanceof ApiError ? err.message : 'Could not start password reset.',
+              'warning'
+            );
+          }
         }}
       />
 
-      <PinSheetModal
+      <ChangePinModal
         isOpen={pinChangeOpen}
-        onClose={() => setPinChangeOpen(false)}
-        title="Change Transaction PIN"
-        subtitle="Enter your current PIN to continue"
-        onSuccess={() => {
+        onClose={() => {
           setPinChangeOpen(false);
-          showToast('PIN Updated', 'Your new 4-digit transaction PIN is active.', 'success');
+          setPinChangeCurrent('');
+        }}
+        onRequestOtp={async currentPin => {
+          try {
+            setPinChangeCurrent(currentPin);
+            return await apiRequestPinChange(currentPin);
+          } catch (err) {
+            throw new Error(
+              err instanceof ApiError ? err.message : 'Could not start PIN change.'
+            );
+          }
+        }}
+        onResendOtp={async () => {
+          try {
+            if (!pinChangeCurrent) {
+              throw new Error('Enter your current PIN again.');
+            }
+            return await apiRequestPinChange(pinChangeCurrent);
+          } catch (err) {
+            throw new Error(err instanceof ApiError ? err.message : 'Could not resend OTP.');
+          }
+        }}
+        onConfirm={async ({ currentPin, otp, newPin }) => {
+          try {
+            await apiConfirmPinChange({
+              currentPin: currentPin || pinChangeCurrent,
+              otp,
+              newPin,
+              confirmPin: newPin,
+            });
+            showToast('PIN Updated', 'Your new 4-digit transaction PIN is active.', 'success');
+          } catch (err) {
+            throw new Error(
+              err instanceof ApiError ? err.message : 'Could not update transaction PIN.'
+            );
+          }
         }}
       />
 
@@ -455,8 +609,8 @@ export const ProfileScreen: React.FC = () => {
             <div className="px-5 py-4 space-y-3">
               <p className="text-[12px] text-[var(--muted)] leading-relaxed">
                 This permanently closes your Xtrapay wallet, cards, and POS mapping. Outstanding
-                balances must be withdrawn first. Type <span className="font-semibold text-[var(--text)]">DELETE</span>{' '}
-                to confirm.
+                balances must be withdrawn first. Type{' '}
+                <span className="font-semibold text-[var(--text)]">DELETE</span> to confirm.
               </p>
               <input
                 className={fieldClass}
@@ -468,16 +622,22 @@ export const ProfileScreen: React.FC = () => {
               />
               <button
                 type="button"
-                disabled={deleteConfirm.trim().toUpperCase() !== 'DELETE'}
+                disabled={deleteConfirm.trim().toUpperCase() !== 'DELETE' || deleting}
                 onClick={() => {
-                  setDeleteOpen(false);
-                  setDeleteConfirm('');
-                  logout();
-                  showToast(
-                    'Account deleted',
-                    'Your Xtrapay account deletion request was submitted. You have been signed out.',
-                    'warning'
-                  );
+                  void (async () => {
+                    setDeleting(true);
+                    try {
+                      const ok = await deleteAccount({
+                        confirm: 'DELETE',
+                      });
+                      if (ok) {
+                        setDeleteOpen(false);
+                        setDeleteConfirm('');
+                      }
+                    } finally {
+                      setDeleting(false);
+                    }
+                  })();
                 }}
                 className={`w-full h-12 rounded-2xl text-[14px] font-semibold transition-all ${
                   deleteConfirm.trim().toUpperCase() === 'DELETE'
@@ -485,7 +645,7 @@ export const ProfileScreen: React.FC = () => {
                     : 'bg-rose-500/20 text-rose-500/50 cursor-not-allowed'
                 }`}
               >
-                Permanently delete account
+                {deleting ? 'Deleting…' : 'Permanently delete account'}
               </button>
             </div>
           </div>
@@ -539,14 +699,14 @@ const Row: React.FC<{
       <button
         type="button"
         onClick={onClick}
-        className="settings-row w-full flex items-center gap-3 px-3.5 py-3.5 text-left bg-transparent border-0 appearance-none cursor-pointer active:bg-black/[0.03] dark:active:bg-white/[0.04]"
+        className="settings-row w-full flex items-center gap-3 px-3.5 py-3.5 text-left appearance-none border-0 bg-transparent cursor-pointer"
       >
         {body}
       </button>
     );
   }
 
-  return <div className="w-full flex items-center gap-3 px-3.5 py-3.5">{body}</div>;
+  return <div className="flex items-center gap-3 px-3.5 py-3.5">{body}</div>;
 };
 
 const ToggleRow: React.FC<{

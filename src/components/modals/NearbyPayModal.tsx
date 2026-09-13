@@ -1,6 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useTransactions } from '../../context/TransactionContext';
-import { NEARBY_PEERS } from '../../data/initialData';
+import { ApiError } from '../../lib/api';
+import {
+  apiProximityReceiveSession,
+  apiProximityResolve,
+} from '../../lib/xtrapayApi';
 import { NearbyPeer } from '../../types';
 import { Icon } from '../Icon';
 import { PinSheetModal } from '../common/PinSheetModal';
@@ -10,30 +14,103 @@ export const NearbyPayModal: React.FC = () => {
     isNearbyPayOpen,
     setIsNearbyPayOpen,
     executeNearbySend,
-    simulateInwardTransfer,
+    accountFullName,
     showToast,
   } = useTransactions();
 
   const [mode, setMode] = useState<'send' | 'receive'>('send');
-  const [isScanning, setIsScanning] = useState<boolean>(true);
+  const [isScanning, setIsScanning] = useState(false);
   const [peers, setPeers] = useState<NearbyPeer[]>([]);
   const [selectedPeer, setSelectedPeer] = useState<NearbyPeer | null>(null);
-  const [amountStr, setAmountStr] = useState<string>('3,500');
-  const [isKeypadOpen, setIsKeypadOpen] = useState<boolean>(false);
-  const [isPinOpen, setIsPinOpen] = useState<boolean>(false);
+  const [amountStr, setAmountStr] = useState('3,500');
+  const [isKeypadOpen, setIsKeypadOpen] = useState(false);
+  const [isPinOpen, setIsPinOpen] = useState(false);
+  const [tokenInput, setTokenInput] = useState('');
+  const [receiveSession, setReceiveSession] = useState<{
+    bleToken: string;
+    displayName: string;
+    walletTag?: string;
+    phone?: string;
+  } | null>(null);
+  const [receiveBusy, setReceiveBusy] = useState(false);
+  const openRef = useRef(false);
 
   useEffect(() => {
-    if (isNearbyPayOpen) {
-      setIsScanning(true);
-      const timer = setTimeout(() => {
-        setPeers(NEARBY_PEERS);
-        setIsScanning(false);
-      }, 1200);
-      return () => clearTimeout(timer);
-    } else {
+    openRef.current = isNearbyPayOpen;
+    if (!isNearbyPayOpen) {
       setPeers([]);
+      setSelectedPeer(null);
+      setReceiveSession(null);
+      setTokenInput('');
+      setIsScanning(false);
+      return;
     }
-  }, [isNearbyPayOpen]);
+    if (mode === 'receive') {
+      void startReceive();
+    }
+  }, [isNearbyPayOpen, mode]);
+
+  const startReceive = async () => {
+    setReceiveBusy(true);
+    try {
+      const session = await apiProximityReceiveSession();
+      if (!openRef.current) return;
+      setReceiveSession({
+        bleToken: session.bleToken,
+        displayName: session.displayName || accountFullName || 'You',
+        walletTag: session.walletTag,
+        phone: session.phone,
+      });
+    } catch (err) {
+      if (!openRef.current) return;
+      setReceiveSession(null);
+      showToast(
+        'Receive unavailable',
+        err instanceof ApiError ? err.message : 'Could not start nearby receive session.',
+        'warning'
+      );
+    } finally {
+      setReceiveBusy(false);
+    }
+  };
+
+  const resolveToken = async () => {
+    const bleToken = tokenInput.trim().toUpperCase();
+    if (bleToken.length < 4) {
+      showToast('Enter token', 'Paste or type the nearby wallet BLE token.', 'warning');
+      return;
+    }
+    setIsScanning(true);
+    try {
+      const resolved = await apiProximityResolve(bleToken);
+      if (!resolved.hasWallet && resolved.hasWallet !== undefined) {
+        showToast('No wallet', 'This token is not linked to a wallet.', 'warning');
+        return;
+      }
+      const peer: NearbyPeer = {
+        id: resolved.walletId || bleToken,
+        name: resolved.recipientName,
+        device: 'Nearby BLE',
+        distance: 'Nearby',
+        walletTag: resolved.walletTag || `@${bleToken.toLowerCase()}`,
+        avatarColor: 'bg-[#8083ff]/30 text-[#c0c1ff]',
+        bleToken,
+      };
+      setPeers(prev => {
+        const without = prev.filter(p => p.bleToken !== bleToken);
+        return [peer, ...without];
+      });
+      showToast('Wallet found', `${resolved.recipientName} is ready for nearby pay.`, 'success');
+    } catch (err) {
+      showToast(
+        'Resolve failed',
+        err instanceof ApiError ? err.message : 'Could not resolve nearby token.',
+        'warning'
+      );
+    } finally {
+      setIsScanning(false);
+    }
+  };
 
   if (!isNearbyPayOpen) return null;
 
@@ -42,25 +119,14 @@ export const NearbyPayModal: React.FC = () => {
     setIsKeypadOpen(true);
   };
 
-  const handleProceedToPin = () => {
-    setIsKeypadOpen(false);
-    setIsPinOpen(true);
-  };
-
-  const handlePinSuccess = (pin: string) => {
-    if (selectedPeer) {
-      const amount = parseFloat(amountStr.replace(/,/g, ''));
-      const ok = executeNearbySend(selectedPeer, amount, pin);
-      if (ok) {
-        setIsPinOpen(false);
-        setIsNearbyPayOpen(false);
-      }
+  const handlePinSuccess = async (pin: string) => {
+    if (!selectedPeer) return;
+    const amount = parseFloat(amountStr.replace(/,/g, ''));
+    const ok = await executeNearbySend(selectedPeer, amount, pin);
+    if (ok) {
+      setIsPinOpen(false);
+      setIsNearbyPayOpen(false);
     }
-  };
-
-  const handleSimulateIncoming = () => {
-    simulateInwardTransfer(5000, 'Sarah Williams (Nearby BLE)');
-    setIsNearbyPayOpen(false);
   };
 
   return (
@@ -69,7 +135,6 @@ export const NearbyPayModal: React.FC = () => {
         className="app-modal-panel bg-[#181c24] border border-[#464554]/40 p-6 shadow-2xl space-y-4 animate-slideUp text-left"
         id="nearby-pay-modal"
       >
-        {/* Header */}
         <div className="flex items-center justify-between pb-2 border-b border-[#464554]/20">
           <div className="flex items-center space-x-2">
             <span className="w-8 h-8 rounded-full bg-[#8083ff]/20 text-[#c0c1ff] flex items-center justify-center">
@@ -89,7 +154,6 @@ export const NearbyPayModal: React.FC = () => {
           </button>
         </div>
 
-        {/* Mode Selector: Send Nearby | Receive Nearby */}
         <div className="p-1 rounded-xl bg-[#0a0e16] border border-[#464554]/30 flex items-center">
           <button
             onClick={() => setMode('send')}
@@ -117,7 +181,6 @@ export const NearbyPayModal: React.FC = () => {
           </button>
         </div>
 
-        {/* SEND NEARBY MODE */}
         {mode === 'send' && (
           <div className="space-y-3 animate-fadeIn">
             <div className="p-3 rounded-xl bg-[#1c2028] border border-[#464554]/30 flex items-center justify-between text-xs">
@@ -128,93 +191,128 @@ export const NearbyPayModal: React.FC = () => {
                 </span>
                 <span className="text-[#dfe2ee] font-medium">
                   {isScanning
-                    ? 'Scanning for nearby Checkout devices...'
-                    : `${peers.length} nearby wallets discovered`}
+                    ? 'Resolving nearby wallet…'
+                    : peers.length
+                      ? `${peers.length} wallet${peers.length === 1 ? '' : 's'} ready`
+                      : 'Enter a BLE token from the other phone'}
                 </span>
               </div>
-              <span className="text-[10px] text-[#908fa0] font-mono">BLE 5.2 Active</span>
+              <span className="text-[10px] text-[#908fa0] font-mono">Live API</span>
             </div>
 
             <p className="text-[11px] text-[#908fa0] px-1">
-              Hold phones back-to-back or within 10 meters to pay instantly without sharing account numbers.
+              On mobile, BLE discovers wallets automatically. Here, paste the receive token from the
+              other phone, resolve it, then send.
             </p>
 
-            {/* Candidate Peers List */}
-            <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
-              {peers.map(peer => (
-                <div
-                  key={peer.id}
-                  className="p-3 rounded-xl bg-[#1c2028] border border-[#464554]/30 flex items-center justify-between hover:border-[#8083ff]/60 transition-all group"
-                >
-                  <div className="flex items-center space-x-3">
-                    <div className="w-9 h-9 rounded-full bg-[#8083ff]/20 text-[#c0c1ff] flex items-center justify-center font-bold text-xs">
-                      {peer.name.split(' ').map(w => w[0]).join('')}
-                    </div>
-                    <div>
-                      <div className="flex items-center space-x-1.5">
-                        <p className="text-xs font-bold text-[#dfe2ee]">{peer.name}</p>
-                        <span className="text-[9px] px-1.5 py-0.2 rounded bg-[#4edea3]/20 text-[#4edea3] font-mono">
-                          Verified
-                        </span>
-                      </div>
-                      <p className="text-[10px] text-[#908fa0]">
-                        {peer.walletTag} • {peer.distance} away
-                      </p>
-                    </div>
-                  </div>
+            <div className="flex gap-2">
+              <input
+                value={tokenInput}
+                onChange={e => setTokenInput(e.target.value.toUpperCase())}
+                placeholder="BLE token"
+                className="flex-1 h-11 px-3 rounded-xl bg-[#0a0e16] border border-[#464554]/40 text-[#dfe2ee] text-xs font-mono focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => void resolveToken()}
+                className="h-11 px-3 rounded-xl bg-[#8083ff] text-[#0d0096] text-xs font-bold"
+              >
+                Resolve
+              </button>
+            </div>
 
-                  <button
-                    onClick={() => handleStartSend(peer)}
-                    className="h-8 px-3 rounded-lg bg-[#8083ff] hover:bg-[#979aff] text-[#0d0096] text-xs font-bold flex items-center space-x-1 shadow-sm transition-all active:scale-95 cursor-pointer"
-                    type="button"
-                  >
-                    <span>Send</span>
-                    <Icon name="arrow_forward" size={14} />
-                  </button>
+            <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+              {peers.length === 0 ? (
+                <div className="p-4 rounded-xl bg-[#1c2028] border border-[#464554]/30 text-center text-[11px] text-[#908fa0]">
+                  No nearby wallets yet. Ask the other person to open Receive Nearby and share their
+                  token.
                 </div>
-              ))}
+              ) : (
+                peers.map(peer => (
+                  <div
+                    key={peer.id}
+                    className="p-3 rounded-xl bg-[#1c2028] border border-[#464554]/30 flex items-center justify-between"
+                  >
+                    <div className="flex items-center space-x-3 min-w-0">
+                      <div className="w-9 h-9 rounded-full bg-[#8083ff]/20 text-[#c0c1ff] flex items-center justify-center font-bold text-xs">
+                        {peer.name
+                          .split(' ')
+                          .map(w => w[0])
+                          .join('')
+                          .slice(0, 2)}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold text-[#dfe2ee] truncate">{peer.name}</p>
+                        <p className="text-[10px] text-[#908fa0]">
+                          {peer.walletTag} · {peer.bleToken}
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => handleStartSend(peer)}
+                      className="h-8 px-3 rounded-lg bg-[#8083ff] text-[#0d0096] text-xs font-bold"
+                      type="button"
+                    >
+                      Send
+                    </button>
+                  </div>
+                ))
+              )}
             </div>
           </div>
         )}
 
-        {/* RECEIVE NEARBY MODE */}
         {mode === 'receive' && (
           <div className="space-y-4 py-2 animate-fadeIn text-center">
-            {/* BLE Radar Animation */}
             <div className="relative w-28 h-28 mx-auto flex items-center justify-center">
               <div className="absolute inset-0 rounded-full border border-[#8083ff]/30 animate-ping opacity-50" />
-              <div className="absolute inset-2 rounded-full border border-[#8083ff]/40 animate-pulse" />
               <div className="w-16 h-16 rounded-full bg-[#8083ff]/20 border border-[#8083ff] flex items-center justify-center text-[#c0c1ff]">
                 <Icon name="wifi" size={28} />
               </div>
             </div>
 
-            <div className="space-y-1">
-              <span className="px-2 py-0.5 rounded-full bg-[#4edea3]/15 text-[#4edea3] text-[10px] font-mono uppercase font-bold">
-                Broadcasting BLE Beacon
-              </span>
-              <h4 className="text-sm font-bold text-[#dfe2ee]">Tunde Bakare</h4>
-              <p className="text-xs text-[#c0c1ff] font-mono">@tunde_b • 0803 124 8920</p>
-              <p className="text-[11px] text-[#908fa0] max-w-xs mx-auto pt-1">
-                Ready to receive — hold phones back-to-back. Senders nearby will see your wallet tag.
-              </p>
-            </div>
-
-            {/* Simulator Button */}
-            <div className="pt-2 border-t border-[#464554]/20">
+            {receiveBusy ? (
+              <p className="text-xs text-[#908fa0]">Starting receive session…</p>
+            ) : receiveSession ? (
+              <div className="space-y-1">
+                <span className="px-2 py-0.5 rounded-full bg-[#4edea3]/15 text-[#4edea3] text-[10px] font-mono uppercase font-bold">
+                  Broadcasting token
+                </span>
+                <h4 className="text-sm font-bold text-[#dfe2ee]">{receiveSession.displayName}</h4>
+                <p className="text-xs text-[#c0c1ff] font-mono">
+                  {receiveSession.walletTag || 'Nearby receive'}
+                </p>
+                <p className="text-lg font-mono font-bold text-[#dfe2ee] tracking-[0.2em] pt-2">
+                  {receiveSession.bleToken}
+                </p>
+                <p className="text-[11px] text-[#908fa0] max-w-xs mx-auto pt-1">
+                  Share this token with the sender (or let BLE advertise it on the native app).
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (navigator.clipboard) {
+                      void navigator.clipboard.writeText(receiveSession.bleToken);
+                    }
+                    showToast('Token copied', 'Nearby receive token copied.', 'success');
+                  }}
+                  className="mt-2 h-10 px-4 rounded-xl bg-[#262a33] text-[#c0c1ff] text-xs font-semibold border border-[#464554]/40"
+                >
+                  Copy token
+                </button>
+              </div>
+            ) : (
               <button
-                onClick={handleSimulateIncoming}
-                className="w-full h-11 rounded-xl bg-[#262a33] hover:bg-[#31353e] text-[#4edea3] text-xs font-semibold border border-[#4edea3]/30 flex items-center justify-center space-x-2 transition-all cursor-pointer"
                 type="button"
+                onClick={() => void startReceive()}
+                className="h-11 px-4 rounded-xl bg-[#8083ff] text-[#0d0096] text-xs font-bold"
               >
-                <Icon name="bolt" size={16} />
-                <span>Simulate Inward Transfer (₦5,000 via BLE)</span>
+                Start receive session
               </button>
-            </div>
+            )}
           </div>
         )}
 
-        {/* AMOUNT SHEET FOR NEARBY SEND */}
         {isKeypadOpen && selectedPeer && (
           <div className="app-modal-overlay z-[80] bg-black/80 backdrop-blur-md animate-fadeIn">
             <div className="app-modal-panel bg-[#181c24] border border-[#464554]/40 p-6 shadow-2xl space-y-4 animate-slideUp">
@@ -230,43 +328,38 @@ export const NearbyPayModal: React.FC = () => {
                   <Icon name="close" size={18} />
                 </button>
               </div>
-
               <div className="text-center py-2">
                 <span className="text-xs text-[#908fa0] block">Transfer Amount</span>
                 <div className="text-3xl font-mono font-bold text-[#c0c1ff] tracking-tight">
                   ₦{amountStr}
                 </div>
-                <p className="text-[11px] text-[#4edea3] mt-0.5">
-                  Proximity direct transfer • Instant settlement
-                </p>
               </div>
-
               <div className="grid grid-cols-4 gap-2">
                 {['1,000', '2,500', '5,000', '10,000'].map(chip => (
                   <button
                     key={chip}
                     onClick={() => setAmountStr(chip)}
-                    className="py-1.5 rounded-lg bg-[#262a33] text-xs font-mono text-[#c0c1ff] hover:bg-[#31353e] border border-[#464554]/30"
+                    className="py-1.5 rounded-lg bg-[#262a33] text-xs font-mono text-[#c0c1ff]"
                     type="button"
                   >
                     ₦{chip}
                   </button>
                 ))}
               </div>
-
               <button
-                onClick={handleProceedToPin}
-                className="w-full h-12 rounded-xl bg-[#8083ff] text-[#0d0096] text-sm font-bold flex items-center justify-center space-x-2 shadow-lg hover:brightness-110 active:scale-98 transition-all cursor-pointer"
+                onClick={() => {
+                  setIsKeypadOpen(false);
+                  setIsPinOpen(true);
+                }}
+                className="w-full h-12 rounded-xl bg-[#8083ff] text-[#0d0096] text-sm font-bold"
                 type="button"
               >
-                <span>Authorize Payment (PIN)</span>
-                <Icon name="arrow_forward" size={18} />
+                Authorize Payment (PIN)
               </button>
             </div>
           </div>
         )}
 
-        {/* PIN SHEET */}
         <PinSheetModal
           isOpen={isPinOpen}
           onClose={() => setIsPinOpen(false)}
@@ -274,7 +367,7 @@ export const NearbyPayModal: React.FC = () => {
           recipient={selectedPeer?.name}
           amount={parseFloat(amountStr.replace(/,/g, '')) || 0}
           subtitle="Direct Bluetooth LE payment"
-          onSuccess={handlePinSuccess}
+          onSuccess={pin => void handlePinSuccess(pin)}
         />
       </div>
     </div>

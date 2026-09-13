@@ -27,12 +27,25 @@ export const HubScreen: React.FC = () => {
     setIsNearbyPayOpen,
     setIsPayAtShopOpen,
     setIsScanToPayOpen,
+    refreshBalances,
     showToast,
     theme,
   } = useTransactions();
 
   const isLight = theme === 'light';
   const [isPosPinOpen, setIsPosPinOpen] = useState(false);
+  const refreshBalancesRef = useRef(refreshBalances);
+  refreshBalancesRef.current = refreshBalances;
+
+  // Live balances: refresh when Hub opens and when the app returns to foreground.
+  useEffect(() => {
+    void refreshBalancesRef.current();
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void refreshBalancesRef.current();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, []);
   const actionRailRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef({
     active: false,

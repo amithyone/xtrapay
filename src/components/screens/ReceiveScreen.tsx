@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useTransactions } from '../../context/TransactionContext';
 import { Icon } from '../Icon';
 
@@ -6,6 +6,9 @@ export const ReceiveScreen: React.FC = () => {
   const {
     accountContext,
     setAccountContext,
+    wallets,
+    accountFullName,
+    accountTier,
     setIsQrOpen,
     setIsShareOpen,
     setActiveScreen,
@@ -14,26 +17,39 @@ export const ReceiveScreen: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<'personal' | 'business'>(accountContext);
 
-  const accountInfo =
-    activeTab === 'personal'
-      ? {
-          name: 'Innocent Solomon',
-          number: '1000003925',
-          bank: 'RUBIES MFB',
-          tier: 'Tier 2',
-          ussd: '*901*000*1000003925#',
-          badge: 'Personal account',
-        }
-      : {
-          name: 'Xtrapay Global Ventures',
-          number: '2048991204',
-          bank: 'PROVIDUS BANK',
-          tier: 'Corporate Tier 3',
-          ussd: '*901*000*2048991204#',
-          badge: 'Business vault',
-        };
+  const accountInfo = useMemo(() => {
+    const wallet =
+      wallets.find(w => w.kind === activeTab) ??
+      wallets.find(w =>
+        activeTab === 'personal' ? w.kind === 'sub_personal' : w.kind === 'sub_business'
+      );
+
+    const number = wallet?.accountNumber?.trim() || '—';
+    const bank = wallet?.bankName?.trim() || '—';
+    const name =
+      wallet?.accountName?.trim() ||
+      accountFullName.trim() ||
+      wallet?.name?.trim() ||
+      '—';
+    const ussd =
+      wallet?.ussd?.trim() ||
+      (number !== '—' ? `*901*000*${number}#` : '—');
+
+    return {
+      name,
+      number,
+      bank,
+      tier: accountTier || 'Tier 1',
+      ussd,
+      badge: activeTab === 'personal' ? 'Personal account' : 'Business vault',
+    };
+  }, [activeTab, wallets, accountFullName, accountTier]);
 
   const copyField = (val: string, label: string) => {
+    if (!val || val === '—') {
+      showToast('Unavailable', `${label} is not ready yet.`, 'warning');
+      return;
+    }
     if (navigator.clipboard) {
       navigator.clipboard.writeText(val);
     }

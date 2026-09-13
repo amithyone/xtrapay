@@ -8,12 +8,9 @@ import {
   GroupPot,
   NearbyPeer,
   ShopTerminal,
+  Beneficiary,
 } from '../types';
-import {
-  INITIAL_TRANSACTIONS,
-  INITIAL_MONEY_REQUESTS,
-  INITIAL_GROUP_POTS,
-} from '../data/initialData';
+import { SUPPORTED_BANKS } from '../data/initialData';
 import {
   INITIAL_WALLETS,
   walletParentContext,
@@ -21,14 +18,74 @@ import {
 } from '../data/wallets';
 import { ApiError, getAccessToken, setAccessToken } from '../lib/api';
 import {
+  apiAcceptMoneyRequest,
+  apiAcceptPot,
   apiBanks,
+  apiBeneficiaries,
   apiBootstrap,
+  apiCancelMoneyRequest,
+  apiContributePot,
+  apiCreateMoneyRequest,
+  apiCreatePot,
   apiCreateTransfer,
+  apiCreditOverview,
+  apiDeclineMoneyRequest,
+  apiDeclinePot,
+  apiDeleteAccount,
   apiLogout,
+  apiMe,
+  apiMoneyRequests,
+  apiPots,
+  apiProximityPay,
+  apiRequestLoan,
+  apiRequestOverdraft,
+  apiShopPay,
+  apiTransactions,
+  apiUpdateMe,
+  apiWallets,
+  mapApiUserProfile,
   mapApiWallets,
   type ApiBank,
+  type UserProfile,
 } from '../lib/xtrapayApi';
-import { SUPPORTED_BANKS } from '../data/initialData';
+
+const BENEFICIARY_COLORS = [
+  'text-[#c0c1ff]',
+  'text-[#4edea3]',
+  'text-[#4cd7f6]',
+  'text-[#8083ff]',
+  'text-[#dfe2ee]',
+];
+
+function initialsFromName(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return '??';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0] ?? ''}${parts[1][0] ?? ''}`.toUpperCase();
+}
+
+function mapApiBeneficiary(
+  b: {
+    id: string;
+    name: string;
+    initials?: string;
+    bank: string;
+    accountNumber: string;
+    tier?: string | null;
+    colorClass?: string | null;
+  },
+  index = 0
+): Beneficiary {
+  return {
+    id: b.id,
+    name: b.name,
+    initials: b.initials || initialsFromName(b.name),
+    bank: b.bank,
+    accountNumber: b.accountNumber,
+    tier: b.tier || 'Tier 1',
+    colorClass: b.colorClass || BENEFICIARY_COLORS[index % BENEFICIARY_COLORS.length],
+  };
+}
 
 interface ToastInfo {
   id: string;
@@ -51,6 +108,7 @@ interface TransactionContextType {
   selectedWallet: WalletAccount;
   selectWallet: (id: string) => void;
   addWallet: (wallet: WalletAccount) => void;
+  refreshBalances: () => Promise<void>;
   banks: ApiBank[];
   banksLoading: boolean;
   personalBalance: number;
@@ -67,6 +125,15 @@ interface TransactionContextType {
   setStrictAutoSave: (enabled: boolean) => void;
   balanceHidden: boolean;
   setBalanceHidden: (hidden: boolean) => void;
+  accountTier: string;
+  kycStatus: string;
+  accountFullName: string;
+  userProfile: UserProfile | null;
+  refreshProfile: () => Promise<void>;
+  updateProfile: (
+    patch: Parameters<typeof apiUpdateMe>[0]
+  ) => Promise<boolean>;
+  deleteAccount: (payload: { confirm: string; pin?: string }) => Promise<boolean>;
 
   // Auth
   isAuthenticated: boolean;
@@ -79,6 +146,7 @@ interface TransactionContextType {
   
   // Real-time Transactions
   transactions: Transaction[];
+  beneficiaries: Beneficiary[];
   activeTransfer: ActiveProcessingTransfer | null;
   initiateTransfer: (params: {
     amount: number;
@@ -112,20 +180,22 @@ interface TransactionContextType {
   
   // Peer Money & Ask For Money
   moneyRequests: MoneyRequest[];
+  refreshMoneyRequests: () => Promise<void>;
   sendMoneyRequest: (params: {
     recipientName: string;
     recipientPhone: string;
     amount: number;
     note?: string;
-  }) => void;
+  }) => Promise<boolean>;
   requestFacility: (params: {
     kind: 'overdraft' | 'loan';
     amount: number;
     tenor?: string;
-  }) => void;
-  acceptMoneyRequest: (requestId: string, pin: string) => boolean;
-  declineMoneyRequest: (requestId: string) => void;
-  cancelMoneyRequest: (requestId: string) => void;
+    pin?: string;
+  }) => Promise<boolean>;
+  acceptMoneyRequest: (requestId: string, pin: string) => Promise<boolean>;
+  declineMoneyRequest: (requestId: string) => Promise<void>;
+  cancelMoneyRequest: (requestId: string) => Promise<void>;
   overdraftLimit: number;
 
   // Group Savings (Save Together)
@@ -136,10 +206,11 @@ interface TransactionContextType {
     targetAmount: number;
     frequency: string;
     members: Array<{ name: string; phone: string }>;
-  }) => void;
-  contributeToPot: (potId: string, amount: number, pin: string) => boolean;
-  acceptPotInvite: (potId: string) => void;
-  declinePotInvite: (potId: string) => void;
+  }) => Promise<boolean>;
+  contributeToPot: (potId: string, amount: number, pin: string) => Promise<boolean>;
+  acceptPotInvite: (potId: string) => Promise<void>;
+  declinePotInvite: (potId: string) => Promise<void>;
+  refreshPots: () => Promise<void>;
 
   // Proximity Pay Actions
   isNearbyPayOpen: boolean;
@@ -164,8 +235,8 @@ interface TransactionContextType {
       narration?: string;
     } | null
   ) => void;
-  executeNearbySend: (peer: NearbyPeer, amount: number, pin: string) => boolean;
-  executeShopPayment: (shop: ShopTerminal, amount: number, pin: string) => boolean;
+  executeNearbySend: (peer: NearbyPeer, amount: number, pin: string) => Promise<boolean>;
+  executeShopPayment: (shop: ShopTerminal, amount: number, pin: string) => Promise<boolean>;
 
   // Modals & Overlays
   isQrOpen: boolean;
@@ -267,6 +338,17 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
   const [biometricsActive, setBiometricsActive] = useState<boolean>(true);
   const [strictAutoSave, setStrictAutoSave] = useState<boolean>(true);
   const [balanceHidden, setBalanceHidden] = useState<boolean>(false);
+  const [accountTier, setAccountTier] = useState<string>('Tier 1');
+  const [kycStatus, setKycStatus] = useState<string>('none');
+  const [accountFullName, setAccountFullName] = useState<string>('');
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+
+  const applyUserProfile = (profile: UserProfile) => {
+    setUserProfile(profile);
+    if (profile.fullName) setAccountFullName(profile.fullName);
+    if (profile.tier) setAccountTier(profile.tier);
+    if (profile.kyc?.status) setKycStatus(profile.kyc.status);
+  };
 
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
     try {
@@ -293,6 +375,35 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
     }
   };
 
+  const applyWalletBalances = (mapped: WalletAccount[]) => {
+    if (!mapped.length) return;
+    setWallets(prev => {
+      // Preserve order/selection; update balances from server.
+      const byId = new Map(mapped.map(w => [w.id, w]));
+      const merged = prev.map(w => {
+        const live = byId.get(w.id);
+        return live ? { ...w, balance: live.balance, accountNumber: live.accountNumber, bankName: live.bankName } : w;
+      });
+      const missing = mapped.filter(w => !prev.some(p => p.id === w.id));
+      return missing.length ? [...merged, ...missing] : merged;
+    });
+    const personal = mapped.find(w => w.kind === 'personal');
+    const business = mapped.find(w => w.kind === 'business');
+    if (personal) setPersonalBalance(personal.balance);
+    if (business) setBusinessBalance(business.balance);
+  };
+
+  const refreshBalances = async () => {
+    try {
+      const list = await apiWallets();
+      if (Array.isArray(list) && list.length) {
+        applyWalletBalances(mapApiWallets(list));
+      }
+    } catch {
+      // keep last known balances
+    }
+  };
+
   const applyBootstrap = async () => {
     const data = await apiBootstrap();
     const mapped = mapApiWallets(data.wallets);
@@ -302,10 +413,7 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
         ? data.selectedWalletId
         : mapped.find(w => w.kind === 'personal')?.id ?? mapped[0]?.id ?? 'personal';
     setSelectedWalletId(selected);
-    const personal = mapped.find(w => w.kind === 'personal');
-    const business = mapped.find(w => w.kind === 'business');
-    if (personal) setPersonalBalance(personal.balance);
-    if (business) setBusinessBalance(business.balance);
+    applyWalletBalances(mapped.length ? mapped : INITIAL_WALLETS);
     setFlexibleSavings(data.savings.flexibleBalance);
     setStrictSavings(data.savings.strictBalance);
     setStrictAutoSave(data.savings.strictAutoSave);
@@ -313,19 +421,65 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
     setDailyLimit(data.limits.dailySpendCap);
     setOverdraftLimit(data.overdraftLimit);
     setCardFrozen(data.cardFrozen);
-    if (Array.isArray(data.recentTransactions) && data.recentTransactions.length) {
-      setTransactions(data.recentTransactions);
+    if (data.user) {
+      applyUserProfile(mapApiUserProfile(data.user));
+    }
+    // Prefer full ledger; fall back to bootstrap recent slice.
+    try {
+      const ledger = await apiTransactions({ limit: 100 });
+      setTransactions(Array.isArray(ledger) && ledger.length ? ledger : data.recentTransactions ?? []);
+    } catch {
+      setTransactions(
+        Array.isArray(data.recentTransactions) ? data.recentTransactions : []
+      );
     }
     setBanksLoading(true);
     try {
-      const list = await apiBanks();
+      const [list, bens] = await Promise.all([apiBanks(), apiBeneficiaries().catch(() => [])]);
       if (Array.isArray(list) && list.length) {
         setBanks(list);
+      }
+      if (Array.isArray(bens)) {
+        setBeneficiaries(bens.map((b, i) => mapApiBeneficiary(b, i)));
       }
     } catch {
       // keep previous / fallback list
     } finally {
       setBanksLoading(false);
+    }
+    try {
+      const pots = await apiPots();
+      setGroupPots(Array.isArray(pots) ? pots : []);
+    } catch {
+      setGroupPots([]);
+    }
+    try {
+      const [reqs, credit] = await Promise.all([
+        apiMoneyRequests().catch(() => [] as MoneyRequest[]),
+        apiCreditOverview().catch(() => null),
+      ]);
+      setMoneyRequests(Array.isArray(reqs) ? reqs : []);
+      if (credit) {
+        const limit = Number(credit.overdraftLimit ?? credit.overdraft_limit);
+        if (!Number.isNaN(limit) && limit >= 0) setOverdraftLimit(limit);
+      }
+    } catch {
+      setMoneyRequests([]);
+    }
+    try {
+      const me = await apiMe();
+      applyUserProfile(me);
+    } catch {
+      // bootstrap user is enough until Profile refresh
+    }
+  };
+
+  const refreshProfile = async () => {
+    try {
+      const me = await apiMe();
+      applyUserProfile(me);
+    } catch {
+      // keep last known profile
     }
   };
 
@@ -357,6 +511,10 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
     void apiLogout();
     setAccessToken(null);
     setIsAuthenticated(false);
+    setUserProfile(null);
+    setAccountFullName('');
+    setMoneyRequests([]);
+    setGroupPots([]);
     setActiveScreenState('hub');
     setScreenHistory(['hub']);
     try {
@@ -413,14 +571,15 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
   };
 
   // Transactions State
-  const [transactions, setTransactions] = useState<Transaction[]>(INITIAL_TRANSACTIONS);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [beneficiaries, setBeneficiaries] = useState<Beneficiary[]>([]);
 
-  // Peer Money (Ask For Money & Overdraft/Loan)
-  const [moneyRequests, setMoneyRequests] = useState<MoneyRequest[]>(INITIAL_MONEY_REQUESTS);
-  const [overdraftLimit, setOverdraftLimit] = useState<number>(150000);
+  // Peer Money (Ask For Money & Overdraft/Loan) — live from API
+  const [moneyRequests, setMoneyRequests] = useState<MoneyRequest[]>([]);
+  const [overdraftLimit, setOverdraftLimit] = useState<number>(0);
 
   // Group Savings (Save Together)
-  const [groupPots, setGroupPots] = useState<GroupPot[]>(INITIAL_GROUP_POTS);
+  const [groupPots, setGroupPots] = useState<GroupPot[]>([]);
 
   // Proximity Pay States
   const [isNearbyPayOpen, setIsNearbyPayOpen] = useState<boolean>(false);
@@ -496,6 +655,44 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
   };
 
   const dismissToast = () => setToast(null);
+
+  const updateProfile = async (patch: Parameters<typeof apiUpdateMe>[0]): Promise<boolean> => {
+    try {
+      const me = await apiUpdateMe(patch);
+      applyUserProfile(me);
+      return true;
+    } catch (err) {
+      showToast(
+        'Could not update profile',
+        err instanceof ApiError ? err.message : 'Profile update failed.',
+        'warning'
+      );
+      return false;
+    }
+  };
+
+  const deleteAccount = async (payload: {
+    confirm: string;
+    pin?: string;
+  }): Promise<boolean> => {
+    try {
+      await apiDeleteAccount(payload);
+      logout();
+      showToast(
+        'Account deleted',
+        'Your Xtrapay account deletion was submitted. You have been signed out.',
+        'warning'
+      );
+      return true;
+    } catch (err) {
+      showToast(
+        'Delete failed',
+        err instanceof ApiError ? err.message : 'Could not delete account.',
+        'warning'
+      );
+      return false;
+    }
+  };
 
   useEffect(() => {
     if (toast) {
@@ -608,9 +805,38 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
         reference: result.reference,
         bank: result.bankName,
         recipient: result.recipientName,
+        accountNumber: result.accountNumber,
         note: result.narration || narration || 'Xtrapay Direct Settlement',
       };
       setTransactions(prev => [settledTx, ...prev]);
+
+      // Keep Recent recipients in sync with real transfers (no mock list).
+      const acct = result.accountNumber.replace(/\D/g, '');
+      if (acct.length >= 10) {
+        setBeneficiaries(prev => {
+          const existing = prev.findIndex(b => b.accountNumber.replace(/\D/g, '') === acct);
+          const next: Beneficiary = {
+            id: existing >= 0 ? prev[existing].id : `ben-${acct}`,
+            name: result.recipientName,
+            initials: initialsFromName(result.recipientName),
+            bank: result.bankName,
+            accountNumber: acct,
+            tier: existing >= 0 ? prev[existing].tier : 'Tier 1',
+            colorClass:
+              existing >= 0
+                ? prev[existing].colorClass
+                : BENEFICIARY_COLORS[prev.length % BENEFICIARY_COLORS.length],
+          };
+          if (existing >= 0) {
+            const copy = [...prev];
+            copy.splice(existing, 1);
+            return [next, ...copy];
+          }
+          return [next, ...prev];
+        });
+      }
+
+      void refreshBalances();
       playChime('success');
       showToast('Transfer Settled', `₦${amount.toLocaleString()} sent to ${result.recipientName}`);
     } catch (err) {
@@ -833,8 +1059,24 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
     );
   };
 
-  // Peer Money Actions
-  const sendMoneyRequest = ({
+  // Peer Money Actions (live)
+  const refreshMoneyRequests = async () => {
+    try {
+      const [reqs, credit] = await Promise.all([
+        apiMoneyRequests(),
+        apiCreditOverview().catch(() => null),
+      ]);
+      setMoneyRequests(Array.isArray(reqs) ? reqs : []);
+      if (credit) {
+        const limit = Number(credit.overdraftLimit ?? credit.overdraft_limit);
+        if (!Number.isNaN(limit) && limit >= 0) setOverdraftLimit(limit);
+      }
+    } catch {
+      // keep last known list
+    }
+  };
+
+  const sendMoneyRequest = async ({
     recipientName,
     recipientPhone,
     amount,
@@ -844,142 +1086,136 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
     recipientPhone: string;
     amount: number;
     note?: string;
-  }) => {
-    const newReq: MoneyRequest = {
-      id: `req-${Date.now()}`,
-      type: 'contact',
-      requesterName: 'Tunde Bakare',
-      requesterPhone: '0803 124 8920',
-      recipientName,
-      recipientPhone,
-      amount,
-      note,
-      date: 'Today',
-      timestamp: getFormattedTime().slice(0, 5),
-      status: 'Pending',
-      isIncoming: false,
-    };
-    setMoneyRequests(prev => [newReq, ...prev]);
-    playChime('pop');
-    showToast('Request Dispatched', `₦${amount.toLocaleString()} requested from ${recipientName}.`);
+  }): Promise<boolean> => {
+    try {
+      const req = await apiCreateMoneyRequest({
+        recipientPhone,
+        amount,
+        note,
+      });
+      setMoneyRequests(prev => [req, ...prev.filter(r => r.id !== req.id)]);
+      playChime('pop');
+      showToast(
+        'Request Dispatched',
+        `₦${amount.toLocaleString()} requested from ${req.recipientName || recipientName}.`
+      );
+      return true;
+    } catch (err) {
+      showToast(
+        'Could not send request',
+        err instanceof ApiError ? err.message : 'Ask Money is unavailable right now.',
+        'warning'
+      );
+      return false;
+    }
   };
 
-  const requestFacility = ({
+  const requestFacility = async ({
     kind,
     amount,
     tenor,
+    pin,
   }: {
     kind: 'overdraft' | 'loan';
     amount: number;
     tenor?: string;
-  }) => {
-    const t = getFormattedTime();
-    if (kind === 'overdraft') {
-      setOverdraftLimit(prev => prev + amount);
-      playChime('success');
-      showToast('Overdraft Approved', `₦${amount.toLocaleString()} overdraft facility activated on your wallet.`);
-    } else {
-      // Loan disbursed to personal balance
-      setPersonalBalance(prev => prev + amount);
-      const tx: Transaction = {
-        id: `tx-loan-${Date.now()}`,
-        title: 'Institutional Loan Disbursed',
-        subtitle: `Checkout Credit Facility • ${t.slice(0, 5)}`,
-        date: 'Today - 11 Sep 2026',
-        timestamp: t.slice(0, 5),
-        fullTime: t,
-        amount,
-        type: 'credit',
-        status: 'Settled',
-        category: 'transfer',
-        reference: `XTR-LN-${Math.floor(100000 + Math.random() * 900000)}`,
-        note: `Tenor: ${tenor || '30 days'} • 2.5% fixed interest`,
-      };
-      setTransactions(prev => [tx, ...prev]);
-      playChime('success');
-      showToast('Loan Disbursed', `₦${amount.toLocaleString()} credited to your wallet.`);
+    pin?: string;
+  }): Promise<boolean> => {
+    try {
+      if (kind === 'overdraft') {
+        await apiRequestOverdraft({ amount, pin });
+        const credit = await apiCreditOverview().catch(() => null);
+        if (credit) {
+          const limit = Number(credit.overdraftLimit ?? credit.overdraft_limit);
+          if (!Number.isNaN(limit) && limit >= 0) setOverdraftLimit(limit);
+        } else {
+          setOverdraftLimit(prev => prev + amount);
+        }
+        playChime('success');
+        showToast(
+          'Overdraft requested',
+          `₦${amount.toLocaleString()} overdraft facility submitted.`
+        );
+      } else {
+        const req = await apiRequestLoan({ amount, tenor, pin });
+        setMoneyRequests(prev => [req, ...prev.filter(r => r.id !== req.id)]);
+        void refreshBalances();
+        playChime('success');
+        showToast('Loan requested', `₦${amount.toLocaleString()} loan request submitted.`);
+      }
+      void refreshMoneyRequests();
+      return true;
+    } catch (err) {
+      showToast(
+        'Facility request failed',
+        err instanceof ApiError ? err.message : 'Credit facilities unavailable right now.',
+        'warning'
+      );
+      return false;
     }
-
-    const newReq: MoneyRequest = {
-      id: `req-fac-${Date.now()}`,
-      type: kind,
-      facilityKind: kind,
-      requesterName: 'Tunde Bakare',
-      requesterPhone: '0803 124 8920',
-      recipientName: 'CheckoutNow Credit',
-      recipientPhone: 'INSTITUTIONAL',
-      amount,
-      note: kind === 'overdraft' ? 'Wallet Overdraft Limit Extension' : `Personal Quick Loan (${tenor || '30 days'})`,
-      date: 'Today',
-      timestamp: t.slice(0, 5),
-      status: 'Accepted',
-      isIncoming: false,
-      tenor,
-    };
-    setMoneyRequests(prev => [newReq, ...prev]);
   };
 
-  const acceptMoneyRequest = (requestId: string, pin: string): boolean => {
+  const acceptMoneyRequest = async (requestId: string, pin: string): Promise<boolean> => {
     if (!pin || pin.length < 4) {
       showToast('Invalid PIN', 'Please enter your 4-digit security PIN.', 'warning');
       return false;
     }
-
-    const req = moneyRequests.find(r => r.id === requestId);
-    if (!req) return false;
-
-    if (personalBalance < req.amount) {
-      showToast('Insufficient Funds', 'Your balance cannot cover this request.', 'warning');
+    try {
+      const req = await apiAcceptMoneyRequest(requestId, pin);
+      setMoneyRequests(prev => prev.map(r => (r.id === requestId ? req : r)));
+      void refreshBalances();
+      playChime('success');
+      showToast('Payment Sent', `₦${req.amount.toLocaleString()} paid to ${req.requesterName}.`);
+      return true;
+    } catch (err) {
+      showToast(
+        'Accept failed',
+        err instanceof ApiError ? err.message : 'Could not settle this request.',
+        'warning'
+      );
       return false;
     }
-
-    // Deduct balance & record debit transaction
-    setPersonalBalance(prev => prev - req.amount);
-    setDailySpent(prev => prev + req.amount);
-
-    const t = getFormattedTime();
-    const tx: Transaction = {
-      id: `tx-peer-${Date.now()}`,
-      title: `Transfer to ${req.requesterName}`,
-      subtitle: `Money Request Accepted • ${t.slice(0, 5)}`,
-      date: 'Today - 11 Sep 2026',
-      timestamp: t.slice(0, 5),
-      fullTime: t,
-      amount: req.amount,
-      type: 'debit',
-      status: 'Successful',
-      category: 'p2p',
-      reference: `XTR-REQ-${Math.floor(100000 + Math.random() * 900000)}`,
-      recipient: req.requesterName,
-      note: req.note || 'Settled peer money request',
-    };
-    setTransactions(prev => [tx, ...prev]);
-
-    setMoneyRequests(prev =>
-      prev.map(r => (r.id === requestId ? { ...r, status: 'Accepted' as const } : r))
-    );
-
-    playChime('success');
-    showToast('Payment Sent', `₦${req.amount.toLocaleString()} paid to ${req.requesterName}.`);
-    return true;
   };
 
-  const declineMoneyRequest = (requestId: string) => {
-    setMoneyRequests(prev =>
-      prev.map(r => (r.id === requestId ? { ...r, status: 'Declined' as const } : r))
-    );
-    showToast('Request Declined', 'The request has been marked as declined.', 'info');
+  const declineMoneyRequest = async (requestId: string) => {
+    try {
+      const req = await apiDeclineMoneyRequest(requestId);
+      setMoneyRequests(prev => prev.map(r => (r.id === requestId ? req : r)));
+      showToast('Request Declined', 'The request has been marked as declined.', 'info');
+    } catch (err) {
+      showToast(
+        'Decline failed',
+        err instanceof ApiError ? err.message : 'Could not decline this request.',
+        'warning'
+      );
+    }
   };
 
-  const cancelMoneyRequest = (requestId: string) => {
-    setMoneyRequests(prev =>
-      prev.map(r => (r.id === requestId ? { ...r, status: 'Cancelled' as const } : r))
-    );
-    showToast('Request Cancelled', 'Your money request was cancelled.', 'info');
+  const cancelMoneyRequest = async (requestId: string) => {
+    try {
+      const req = await apiCancelMoneyRequest(requestId);
+      setMoneyRequests(prev => prev.map(r => (r.id === requestId ? req : r)));
+      showToast('Request Cancelled', 'Your money request was cancelled.', 'info');
+    } catch (err) {
+      showToast(
+        'Cancel failed',
+        err instanceof ApiError ? err.message : 'Could not cancel this request.',
+        'warning'
+      );
+    }
   };
 
   // Group Pot Actions (Save Together)
-  const createGroupPot = ({
+  const refreshPots = async () => {
+    try {
+      const pots = await apiPots();
+      setGroupPots(Array.isArray(pots) ? pots : []);
+    } catch {
+      // keep last known list
+    }
+  };
+
+  const createGroupPot = async ({
     title,
     subtitle,
     targetAmount,
@@ -991,194 +1227,197 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
     targetAmount: number;
     frequency: string;
     members: Array<{ name: string; phone: string }>;
-  }) => {
-    const totalMemberCount = inviteMembers.length + 1; // including creator
-    const perShare = Math.round(targetAmount / totalMemberCount);
-
-    const fullMembers = [
-      {
-        id: `mem-creator-${Date.now()}`,
-        name: 'Tunde Bakare (You)',
-        phone: '0803 124 8920',
-        initials: 'TB',
-        status: 'Active' as const,
-        contributed: 0,
-        share: perShare,
-        isCreator: true,
-        avatarColor: 'bg-[#8083ff]/30 text-[#c0c1ff]',
-      },
-      ...inviteMembers.map((m, idx) => ({
-        id: `mem-${idx}-${Date.now()}`,
-        name: m.name,
-        phone: m.phone,
-        initials: m.name
-          .split(' ')
-          .map(w => w[0])
-          .join('')
-          .toUpperCase()
-          .slice(0, 2),
-        status: 'Pending' as const,
-        contributed: 0,
-        share: perShare,
-        avatarColor: 'bg-[#4edea3]/20 text-[#4edea3]',
-      })),
-    ];
-
-    const newPot: GroupPot = {
-      id: `pot-${Date.now()}`,
-      title,
-      subtitle: subtitle || 'Shared collaborative target pot',
-      targetAmount,
-      raisedAmount: 0,
-      myStatus: 'Active',
-      myContribution: 0,
-      frequency,
-      members: fullMembers,
-    };
-
-    setGroupPots(prev => [newPot, ...prev]);
-    playChime('success');
-    showToast('Pot Created', `Group pot "${title}" active. Invitations sent.`);
+  }): Promise<boolean> => {
+    try {
+      const pot = await apiCreatePot({
+        title,
+        note: subtitle,
+        targetAmount,
+        memberPhones: inviteMembers.map(m => m.phone.replace(/\s+/g, '')),
+        frequency,
+      });
+      setGroupPots(prev => [pot, ...prev.filter(p => p.id !== pot.id)]);
+      playChime('success');
+      showToast('Pot Created', `Group pot "${title}" active. Invitations sent.`);
+      return true;
+    } catch (err) {
+      showToast(
+        'Could not create pot',
+        err instanceof ApiError ? err.message : 'Save Together is unavailable right now.',
+        'warning'
+      );
+      return false;
+    }
   };
 
-  const contributeToPot = (potId: string, amount: number, pin: string): boolean => {
+  const contributeToPot = async (potId: string, amount: number, pin: string): Promise<boolean> => {
     if (!pin || pin.length < 4) {
       showToast('Invalid PIN', 'Enter 4-digit security PIN.', 'warning');
       return false;
     }
-    if (personalBalance < amount) {
-      showToast('Insufficient Funds', 'Transfer exceeds wallet balance.', 'warning');
+    try {
+      const pot = await apiContributePot(potId, { amount, pin });
+      setGroupPots(prev => prev.map(p => (p.id === potId ? pot : p)));
+      void refreshBalances();
+      playChime('success');
+      showToast('Contribution Saved', `₦${amount.toLocaleString()} added to ${pot.title}.`);
+      return true;
+    } catch (err) {
+      showToast(
+        'Contribution failed',
+        err instanceof ApiError ? err.message : 'Could not contribute to pot.',
+        'warning'
+      );
       return false;
     }
-
-    setPersonalBalance(prev => prev - amount);
-    const t = getFormattedTime();
-    const pot = groupPots.find(p => p.id === potId);
-    const potTitle = pot?.title || 'Group Pot';
-
-    const tx: Transaction = {
-      id: `tx-pot-${Date.now()}`,
-      title: `Contribution: ${potTitle}`,
-      subtitle: `Save Together Pot • ${t.slice(0, 5)}`,
-      date: 'Today - 11 Sep 2026',
-      timestamp: t.slice(0, 5),
-      fullTime: t,
-      amount,
-      type: 'debit',
-      status: 'Successful',
-      category: 'savings',
-      reference: `XTR-POT-${Math.floor(100000 + Math.random() * 900000)}`,
-      note: `Contribution towards ${potTitle}`,
-    };
-    setTransactions(prev => [tx, ...prev]);
-
-    setGroupPots(prev =>
-      prev.map(p => {
-        if (p.id !== potId) return p;
-        return {
-          ...p,
-          raisedAmount: p.raisedAmount + amount,
-          myContribution: p.myContribution + amount,
-          members: p.members.map(m =>
-            m.isCreator || m.name.includes('You')
-              ? { ...m, contributed: m.contributed + amount }
-              : m
-          ),
-        };
-      })
-    );
-
-    playChime('success');
-    showToast('Contribution Saved', `₦${amount.toLocaleString()} added to ${potTitle}.`);
-    return true;
   };
 
-  const acceptPotInvite = (potId: string) => {
-    setGroupPots(prev =>
-      prev.map(p => (p.id === potId ? { ...p, myStatus: 'Active' as const } : p))
-    );
-    playChime('pop');
-    showToast('Joined Pot', 'You joined the group savings pot.');
+  const acceptPotInvite = async (potId: string) => {
+    try {
+      const pot = await apiAcceptPot(potId);
+      setGroupPots(prev => prev.map(p => (p.id === potId ? pot : p)));
+      playChime('pop');
+      showToast('Joined Pot', 'You joined the group savings pot.');
+    } catch (err) {
+      showToast(
+        'Could not join',
+        err instanceof ApiError ? err.message : 'Accept invite failed.',
+        'warning'
+      );
+    }
   };
 
-  const declinePotInvite = (potId: string) => {
-    setGroupPots(prev =>
-      prev.map(p => (p.id === potId ? { ...p, myStatus: 'Declined' as const } : p))
-    );
-    showToast('Invitation Declined', 'Pot invitation was declined.', 'info');
+  const declinePotInvite = async (potId: string) => {
+    try {
+      const pot = await apiDeclinePot(potId);
+      setGroupPots(prev => prev.map(p => (p.id === potId ? pot : p)));
+      showToast('Invitation Declined', 'Pot invitation was declined.', 'info');
+    } catch (err) {
+      showToast(
+        'Could not decline',
+        err instanceof ApiError ? err.message : 'Decline invite failed.',
+        'warning'
+      );
+    }
   };
 
   // Proximity Actions Execution
-  const executeNearbySend = (peer: NearbyPeer, amount: number, pin: string): boolean => {
+  const executeNearbySend = async (
+    peer: NearbyPeer,
+    amount: number,
+    pin: string
+  ): Promise<boolean> => {
     if (!pin || pin.length < 4) {
       showToast('Invalid PIN', 'Enter 4-digit PIN.', 'warning');
       return false;
     }
-    if (personalBalance < amount) {
-      showToast('Insufficient Funds', 'Transfer exceeds wallet balance.', 'warning');
+    const bleToken = peer.bleToken?.trim();
+    if (!bleToken) {
+      showToast('Missing token', 'Resolve a nearby wallet token before paying.', 'warning');
       return false;
     }
-
-    setPersonalBalance(prev => prev - amount);
-    setDailySpent(prev => prev + amount);
-
-    const t = getFormattedTime();
-    const tx: Transaction = {
-      id: `tx-ble-${Date.now()}`,
-      title: `Nearby to ${peer.name}`,
-      subtitle: `BLE Wallet Tap • ${t.slice(0, 5)}`,
-      date: 'Today - 11 Sep 2026',
-      timestamp: t.slice(0, 5),
-      fullTime: t,
-      amount,
-      type: 'debit',
-      status: 'Successful',
-      category: 'p2p',
-      reference: `XTR-BLE-${Math.floor(100000 + Math.random() * 900000)}`,
-      recipient: peer.name,
-      note: `Proximity Bluetooth LE transfer to ${peer.walletTag}`,
-    };
-    setTransactions(prev => [tx, ...prev]);
-
-    playChime('success');
-    showToast('Nearby Payment Sent', `₦${amount.toLocaleString()} sent to ${peer.name}.`);
-    return true;
+    try {
+      const result = await apiProximityPay({
+        bleToken,
+        amount,
+        pin,
+        narration: `Nearby pay to ${peer.name}`,
+      });
+      if (typeof result.walletBalance === 'number') {
+        setPersonalBalance(result.walletBalance);
+      } else {
+        void refreshBalances();
+      }
+      const t = getFormattedTime();
+      setTransactions(prev => [
+        {
+          id: `tx-ble-${Date.now()}`,
+          title: `Nearby to ${result.recipientName || peer.name}`,
+          subtitle: `BLE Wallet Tap • ${t.slice(0, 5)}`,
+          date: `Today - ${new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}`,
+          timestamp: t.slice(0, 5),
+          fullTime: t,
+          amount: result.amount ?? amount,
+          type: 'debit',
+          status: 'Successful',
+          category: 'p2p',
+          reference: result.reference,
+          recipient: result.recipientName || peer.name,
+          note: `Proximity Bluetooth LE transfer to ${peer.walletTag}`,
+        },
+        ...prev,
+      ]);
+      playChime('success');
+      showToast(
+        'Nearby Payment Sent',
+        `₦${amount.toLocaleString()} sent to ${result.recipientName || peer.name}.`
+      );
+      return true;
+    } catch (err) {
+      showToast(
+        'Nearby pay failed',
+        err instanceof ApiError ? err.message : 'Could not complete nearby payment.',
+        'warning'
+      );
+      return false;
+    }
   };
 
-  const executeShopPayment = (shop: ShopTerminal, amount: number, pin: string): boolean => {
+  const executeShopPayment = async (
+    shop: ShopTerminal,
+    amount: number,
+    pin: string
+  ): Promise<boolean> => {
     if (!pin || pin.length < 4) {
       showToast('Invalid PIN', 'Enter 4-digit PIN.', 'warning');
       return false;
     }
-    if (personalBalance < amount) {
-      showToast('Insufficient Funds', 'Transfer exceeds wallet balance.', 'warning');
+    try {
+      const result = await apiShopPay({
+        sessionUuid: shop.sessionUuid,
+        terminalId: shop.terminalId,
+        accountNumber: shop.accountNumber,
+        bankCode: shop.bankCode,
+        amount,
+        recipientName: shop.recipientName || shop.name,
+        pin,
+        idempotencyKey: shop.sessionUuid,
+      });
+      if (typeof result.walletBalance === 'number') {
+        setPersonalBalance(result.walletBalance);
+      } else {
+        void refreshBalances();
+      }
+      const t = getFormattedTime();
+      setTransactions(prev => [
+        {
+          id: `tx-shop-${Date.now()}`,
+          title: shop.name,
+          subtitle: `${shop.terminalId} • ${t.slice(0, 5)}`,
+          date: `Today - ${new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}`,
+          timestamp: t.slice(0, 5),
+          fullTime: t,
+          amount: result.amount ?? amount,
+          type: 'debit',
+          status: 'Settled',
+          category: 'transfer',
+          reference: result.reference,
+          recipient: shop.name,
+          note: `Contactless till checkout (${shop.terminalId})`,
+        },
+        ...prev,
+      ]);
+      playChime('success');
+      showToast('Shop Payment Settled', `₦${amount.toLocaleString()} paid to ${shop.name}.`);
+      return true;
+    } catch (err) {
+      showToast(
+        'Shop payment failed',
+        err instanceof ApiError ? err.message : 'Could not pay this till.',
+        'warning'
+      );
       return false;
     }
-
-    setPersonalBalance(prev => prev - amount);
-    setDailySpent(prev => prev + amount);
-
-    const t = getFormattedTime();
-    const tx: Transaction = {
-      id: `tx-shop-${Date.now()}`,
-      title: shop.name,
-      subtitle: `${shop.terminalId} • ${t.slice(0, 5)}`,
-      date: 'Today - 11 Sep 2026',
-      timestamp: t.slice(0, 5),
-      fullTime: t,
-      amount,
-      type: 'debit',
-      status: 'Settled',
-      category: 'transfer',
-      reference: `XTR-POS-${Math.floor(100000 + Math.random() * 900000)}`,
-      recipient: shop.name,
-      note: `Contactless till checkout (${shop.terminalId})`,
-    };
-    setTransactions(prev => [tx, ...prev]);
-
-    playChime('success');
-    showToast('Shop Payment Settled', `₦${amount.toLocaleString()} paid to ${shop.name}.`);
-    return true;
   };
 
   return (
@@ -1194,6 +1433,7 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
         selectedWallet,
         selectWallet,
         addWallet,
+        refreshBalances,
         banks,
         banksLoading,
         personalBalance,
@@ -1210,6 +1450,13 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
         setStrictAutoSave,
         balanceHidden,
         setBalanceHidden,
+        accountTier,
+        kycStatus,
+        accountFullName,
+        userProfile,
+        refreshProfile,
+        updateProfile,
+        deleteAccount,
         isAuthenticated,
         authReady,
         hasSeenIntro,
@@ -1218,6 +1465,7 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
         establishSession,
         logout,
         transactions,
+        beneficiaries,
         activeTransfer,
         initiateTransfer,
         dismissActiveTransfer,
@@ -1227,6 +1475,7 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
         withdrawFlexible,
         simulateInwardTransfer,
         moneyRequests,
+        refreshMoneyRequests,
         sendMoneyRequest,
         requestFacility,
         acceptMoneyRequest,
@@ -1238,6 +1487,7 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
         contributeToPot,
         acceptPotInvite,
         declinePotInvite,
+        refreshPots,
         isNearbyPayOpen,
         setIsNearbyPayOpen,
         isPayAtShopOpen,

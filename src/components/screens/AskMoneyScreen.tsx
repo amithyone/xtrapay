@@ -1,15 +1,18 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useTransactions } from '../../context/TransactionContext';
-import { INITIAL_BENEFICIARIES } from '../../data/initialData';
+import { ApiError } from '../../lib/api';
+import { apiLookupUserByPhone } from '../../lib/xtrapayApi';
 import { Icon } from '../Icon';
 import { PinSheetModal } from '../common/PinSheetModal';
 
 type MainTab = 'new' | 'incoming' | 'sent';
-type RequestKind = 'contact' | 'overdraft' | 'loan';
+
+const REQUESTS_LIVE_POLL_MS = 20_000;
 
 export const AskMoneyScreen: React.FC = () => {
   const {
     moneyRequests,
+    refreshMoneyRequests,
     sendMoneyRequest,
     requestFacility,
     acceptMoneyRequest,
@@ -25,19 +28,103 @@ export const AskMoneyScreen: React.FC = () => {
   const [facilityKind, setFacilityKind] = useState<'overdraft' | 'loan'>('overdraft');
   const [loanTenor, setLoanTenor] = useState<string>('30 days');
 
-  const [phone, setPhone] = useState<string>('0802 339 4410');
-  const [recipientName, setRecipientName] = useState<string>('Adekunle Olumide');
+  const [phone, setPhone] = useState<string>('');
+  const [recipientName, setRecipientName] = useState<string>('');
+  const [recipientHasApp, setRecipientHasApp] = useState(false);
+  const [lookingUp, setLookingUp] = useState(false);
   const [note, setNote] = useState<string>('');
   const [amountStr, setAmountStr] = useState<string>('5,000');
   const [isKeypadOpen, setIsKeypadOpen] = useState<boolean>(false);
   const [showConfirmSummary, setShowConfirmSummary] = useState<boolean>(false);
+  const [submitting, setSubmitting] = useState(false);
 
   const [activeAcceptRequestId, setActiveAcceptRequestId] = useState<string | null>(null);
   const [isPinOpen, setIsPinOpen] = useState<boolean>(false);
 
+  const refreshRef = useRef(refreshMoneyRequests);
+  refreshRef.current = refreshMoneyRequests;
+  const lastLookupPhoneRef = useRef('');
+
+  useEffect(() => {
+    void refreshRef.current();
+    const syncIfVisible = () => {
+      if (document.visibilityState === 'visible') void refreshRef.current();
+    };
+    document.addEventListener('visibilitychange', syncIfVisible);
+    window.addEventListener('focus', syncIfVisible);
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void refreshRef.current();
+    }, REQUESTS_LIVE_POLL_MS);
+    return () => {
+      document.removeEventListener('visibilitychange', syncIfVisible);
+      window.removeEventListener('focus', syncIfVisible);
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  // Lookup recipient when phone reaches 10+ digits (same idea as Save Together).
+  useEffect(() => {
+    const digits = phone.replace(/\D/g, '');
+    if (digits.length < 10) {
+      setRecipientName('');
+      setRecipientHasApp(false);
+      lastLookupPhoneRef.current = '';
+      return;
+    }
+    if (digits === lastLookupPhoneRef.current) return;
+
+    let cancelled = false;
+    const run = async () => {
+      setLookingUp(true);
+      try {
+        const lookup = await apiLookupUserByPhone(phone);
+        if (cancelled) return;
+        lastLookupPhoneRef.current = digits;
+        if (lookup.found && lookup.fullName?.trim()) {
+          setRecipientName(lookup.fullName.trim());
+          setRecipientHasApp(true);
+        } else {
+          setRecipientName('');
+          setRecipientHasApp(false);
+        }
+      } catch (err) {
+        if (cancelled) return;
+        lastLookupPhoneRef.current = digits;
+        setRecipientName('');
+        setRecipientHasApp(false);
+        if (err instanceof ApiError && err.status !== 404) {
+          showToast('Lookup failed', err.message, 'warning');
+        }
+      } finally {
+        if (!cancelled) setLookingUp(false);
+      }
+    };
+    const t = window.setTimeout(run, 350);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(t);
+    };
+  }, [phone, showToast]);
+
   const incomingRequests = moneyRequests.filter(r => r.isIncoming);
   const sentRequests = moneyRequests.filter(r => !r.isIncoming);
   const pendingIncomingCount = incomingRequests.filter(r => r.status === 'Pending').length;
+
+  const recentContacts = (() => {
+    const seen = new Set<string>();
+    const out: Array<{ name: string; phone: string }> = [];
+    for (const r of moneyRequests) {
+      if (r.type !== 'contact') continue;
+      const p = (r.isIncoming ? r.requesterPhone : r.recipientPhone).replace(/\s+/g, '');
+      const n = r.isIncoming ? r.requesterName : r.recipientName;
+      const key = p.replace(/\D/g, '');
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push({ name: n, phone: p });
+      if (out.length >= 8) break;
+    }
+    return out;
+  })();
 
   const fieldClass =
     'w-full h-12 px-4 rounded-2xl bg-black/[0.04] dark:bg-white/[0.06] border border-[var(--glass-border)] text-[var(--text)] text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]/25 transition-all placeholder:text-[var(--muted)]';
@@ -54,15 +141,17 @@ export const AskMoneyScreen: React.FC = () => {
         : 'border-[var(--glass-border)] bg-black/[0.03] dark:bg-white/[0.05] text-[var(--muted)]'
     }`;
 
-  const handleSelectContact = (ben: typeof INITIAL_BENEFICIARIES[0]) => {
-    setRecipientName(ben.name);
-    setPhone(ben.accountNumber.startsWith('0') ? ben.accountNumber : `080${ben.accountNumber.slice(0, 8)}`);
-    showToast('Contact Loaded', `${ben.name} selected.`);
+  const handleSelectContact = (c: { name: string; phone: string }) => {
+    setPhone(c.phone);
+    setRecipientName(c.name);
+    setRecipientHasApp(Boolean(c.name && c.name !== c.phone));
+    lastLookupPhoneRef.current = c.phone.replace(/\D/g, '');
+    showToast('Contact Loaded', `${c.name} selected.`);
   };
 
   const handleOpenAmountSheet = () => {
-    if (requestKind === 'contact' && !phone) {
-      showToast('Missing Contact', 'Please enter a contact phone number.', 'warning');
+    if (requestKind === 'contact' && phone.replace(/\D/g, '').length < 10) {
+      showToast('Missing Contact', 'Enter a valid phone number (at least 10 digits).', 'warning');
       return;
     }
     setIsKeypadOpen(true);
@@ -92,31 +181,45 @@ export const AskMoneyScreen: React.FC = () => {
     }
   };
 
-  const handleSendRequest = () => {
+  const handleSendRequest = async () => {
     const numericAmount = parseFloat(amountStr.replace(/,/g, ''));
     if (isNaN(numericAmount) || numericAmount <= 0) {
       showToast('Invalid Amount', 'Enter a valid amount.', 'warning');
       return;
     }
 
-    if (requestKind === 'contact') {
-      sendMoneyRequest({
-        recipientName: recipientName || 'Checkout Contact',
-        recipientPhone: phone,
-        amount: numericAmount,
-        note: note || undefined,
-      });
-      setIsKeypadOpen(false);
-      setShowConfirmSummary(false);
-      setActiveTab('sent');
-    } else {
-      requestFacility({
-        kind: facilityKind,
-        amount: numericAmount,
-        tenor: facilityKind === 'loan' ? loanTenor : undefined,
-      });
-      setIsKeypadOpen(false);
-      setShowConfirmSummary(false);
+    setSubmitting(true);
+    try {
+      if (requestKind === 'contact') {
+        const ok = await sendMoneyRequest({
+          recipientName: recipientName || phone,
+          recipientPhone: phone,
+          amount: numericAmount,
+          note: note || undefined,
+        });
+        if (ok) {
+          setIsKeypadOpen(false);
+          setShowConfirmSummary(false);
+          setActiveTab('sent');
+          setPhone('');
+          setRecipientName('');
+          setRecipientHasApp(false);
+          setNote('');
+        }
+      } else {
+        const ok = await requestFacility({
+          kind: facilityKind,
+          amount: numericAmount,
+          tenor: facilityKind === 'loan' ? loanTenor : undefined,
+        });
+        if (ok) {
+          setIsKeypadOpen(false);
+          setShowConfirmSummary(false);
+          setActiveTab('sent');
+        }
+      }
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -125,9 +228,9 @@ export const AskMoneyScreen: React.FC = () => {
     setIsPinOpen(true);
   };
 
-  const handlePinSuccess = (pin: string) => {
+  const handlePinSuccess = async (pin: string) => {
     if (activeAcceptRequestId) {
-      const ok = acceptMoneyRequest(activeAcceptRequestId, pin);
+      const ok = await acceptMoneyRequest(activeAcceptRequestId, pin);
       if (ok) {
         setIsPinOpen(false);
         setActiveAcceptRequestId(null);
@@ -196,7 +299,7 @@ export const AskMoneyScreen: React.FC = () => {
             <section className="glass-card glass-strong !rounded-[24px] px-5 py-5 space-y-4">
               <div className="space-y-1.5">
                 <label className="block text-[10px] font-medium uppercase tracking-[0.22em] text-[var(--muted)]">
-                  Recipient phone / wallet tag
+                  Recipient phone
                 </label>
                 <div className="relative">
                   <Icon
@@ -205,16 +308,20 @@ export const AskMoneyScreen: React.FC = () => {
                     className="absolute left-4 top-1/2 -translate-y-1/2 text-[var(--muted)] pointer-events-none"
                   />
                   <input
-                    type="text"
+                    type="tel"
+                    inputMode="tel"
                     value={phone}
                     onChange={e => setPhone(e.target.value)}
-                    placeholder="Enter phone or @tag"
+                    placeholder="0803 000 0000"
                     className={`${fieldClass} !pl-10 font-mono text-[13px]`}
                   />
                 </div>
+                {lookingUp && (
+                  <p className="text-[11px] text-[var(--muted)] px-0.5">Looking up Xtrapay user…</p>
+                )}
               </div>
 
-              {recipientName && (
+              {recipientHasApp && recipientName ? (
                 <div className="flex items-center justify-between gap-3 rounded-2xl border border-emerald-500/30 bg-emerald-500/8 px-3.5 py-3">
                   <div className="flex min-w-0 items-center gap-2.5">
                     <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
@@ -222,37 +329,48 @@ export const AskMoneyScreen: React.FC = () => {
                     </span>
                     <div className="min-w-0">
                       <p className="text-[13px] font-semibold text-[var(--text)] truncate">{recipientName}</p>
-                      <p className="text-[10px] text-emerald-600 dark:text-emerald-400">Verified checkout wallet user</p>
+                      <p className="text-[10px] text-emerald-600 dark:text-emerald-400">Has Xtrapay — name from lookup</p>
                     </div>
                   </div>
-                  <span className="glass-chip !rounded-full !px-2 !py-0.5 text-[10px] font-mono text-[var(--muted)] shrink-0">
-                    Tier 3
-                  </span>
+                </div>
+              ) : phone.replace(/\D/g, '').length >= 10 && !lookingUp ? (
+                <div className="rounded-2xl border border-[var(--glass-border)] bg-black/[0.03] dark:bg-white/[0.05] px-3.5 py-3">
+                  <p className="text-[12px] text-[var(--muted)]">
+                    No Xtrapay account found for this number yet. You can still send a request — their name shows when they join.
+                  </p>
+                </div>
+              ) : null}
+
+              {recentContacts.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-[10px] font-medium uppercase tracking-[0.28em] text-[var(--muted)] px-0.5">
+                    Recent
+                  </p>
+                  <div className="flex gap-2.5 overflow-x-auto no-scrollbar pb-1">
+                    {recentContacts.map(c => (
+                      <button
+                        key={c.phone}
+                        type="button"
+                        onClick={() => handleSelectContact(c)}
+                        className="shrink-0 flex items-center gap-2 rounded-2xl border border-[var(--glass-border)] bg-black/[0.03] dark:bg-white/[0.05] px-3 py-2 transition-all active:scale-[0.98]"
+                      >
+                        <span className="flex h-8 w-8 items-center justify-center rounded-full border border-[var(--glass-border)] bg-white/50 dark:bg-white/8 text-[11px] font-bold text-[var(--accent)]">
+                          {(c.name || '?')
+                            .split(/\s+/)
+                            .filter(Boolean)
+                            .slice(0, 2)
+                            .map(w => w[0])
+                            .join('')
+                            .toUpperCase() || '?'}
+                        </span>
+                        <span className="text-[12px] font-semibold text-[var(--text)]">
+                          {c.name.split(' ')[0] || c.phone}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
-
-              <div className="space-y-2">
-                <p className="text-[10px] font-medium uppercase tracking-[0.28em] text-[var(--muted)] px-0.5">
-                  Saved beneficiaries
-                </p>
-                <div className="flex gap-2.5 overflow-x-auto no-scrollbar pb-1">
-                  {INITIAL_BENEFICIARIES.map(ben => (
-                    <button
-                      key={ben.id}
-                      type="button"
-                      onClick={() => handleSelectContact(ben)}
-                      className="shrink-0 flex items-center gap-2 rounded-2xl border border-[var(--glass-border)] bg-black/[0.03] dark:bg-white/[0.05] px-3 py-2 transition-all active:scale-[0.98]"
-                    >
-                      <span
-                        className={`flex h-8 w-8 items-center justify-center rounded-full border border-[var(--glass-border)] bg-white/50 dark:bg-white/8 text-[11px] font-bold ${ben.colorClass}`}
-                      >
-                        {ben.initials}
-                      </span>
-                      <span className="text-[12px] font-semibold text-[var(--text)]">{ben.name.split(' ')[0]}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
 
               <div className="space-y-1.5">
                 <label className="block text-[10px] font-medium uppercase tracking-[0.22em] text-[var(--muted)]">
@@ -311,14 +429,13 @@ export const AskMoneyScreen: React.FC = () => {
                       <span className="flex h-9 w-9 items-center justify-center rounded-full bg-[var(--accent)]/15 text-[var(--accent)]">
                         <Icon name="bolt" size={17} />
                       </span>
-                      <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">Pre-approved</span>
+                      <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">Live</span>
                     </div>
                     <h3 className="mt-2 text-[12px] font-bold text-[var(--text)]">Overdraft</h3>
                     <p className="text-[10px] text-[var(--muted)] mt-0.5 leading-snug">
                       Spend beyond balance up to limit
                     </p>
                   </button>
-
                   <button
                     type="button"
                     onClick={() => setFacilityKind('loan')}
@@ -327,55 +444,48 @@ export const AskMoneyScreen: React.FC = () => {
                     }`}
                   >
                     <div className="flex items-center justify-between">
-                      <span className="flex h-9 w-9 items-center justify-center rounded-full bg-teal-500/15 text-teal-600">
+                      <span className="flex h-9 w-9 items-center justify-center rounded-full bg-[var(--accent)]/15 text-[var(--accent)]">
                         <Icon name="account_balance" size={17} />
                       </span>
-                      <span className="text-[10px] font-mono font-semibold text-[var(--accent)]">2.5% Mo.</span>
                     </div>
-                    <h3 className="mt-2 text-[12px] font-bold text-[var(--text)]">Loan</h3>
+                    <h3 className="mt-2 text-[12px] font-bold text-[var(--text)]">Quick loan</h3>
                     <p className="text-[10px] text-[var(--muted)] mt-0.5 leading-snug">
-                      Fixed amount to repay with tenor
+                      Disburse to wallet after approval
                     </p>
                   </button>
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-[var(--glass-border)] bg-black/[0.03] dark:bg-white/[0.05] px-3.5 py-3 text-[12px] space-y-1">
-                <p className="font-medium text-[var(--text)]">
-                  {facilityKind === 'overdraft'
-                    ? 'Request an overdraft on your wallet — subject to approval.'
-                    : 'Fixed institutional installment loan disbursed instantly to your wallet.'}
-                </p>
-                <p className="text-[11px] text-[var(--muted)]">
-                  {facilityKind === 'overdraft'
-                    ? `Current authorized limit: ₦${overdraftLimit.toLocaleString()}. Zero interest if settled within 14 days.`
-                    : 'Flexible repayments automatically deducted at cycle maturity.'}
-                </p>
-              </div>
-
               {facilityKind === 'loan' && (
-                <div className="space-y-2">
+                <div className="space-y-1.5">
                   <label className="block text-[10px] font-medium uppercase tracking-[0.22em] text-[var(--muted)]">
-                    Select repayment tenor
+                    Tenor
                   </label>
-                  <div className="grid grid-cols-3 gap-2">
-                    {['30 days', '60 days', '90 days'].map(ten => (
+                  <div className="grid grid-cols-4 gap-2">
+                    {['14 days', '30 days', '60 days', '90 days'].map(t => (
                       <button
-                        key={ten}
+                        key={t}
                         type="button"
-                        onClick={() => setLoanTenor(ten)}
-                        className={`py-2 rounded-xl text-[11px] font-semibold transition-all ${
-                          loanTenor === ten
-                            ? 'bg-[var(--accent)]/15 border border-[var(--accent)] text-[var(--accent)]'
-                            : 'glass-chip !rounded-xl !px-1 !py-2 text-[var(--muted)]'
-                        }`}
+                        onClick={() => setLoanTenor(t)}
+                        className={chipBtn(loanTenor === t)}
                       >
-                        {ten}
+                        {t.replace(' days', 'd')}
                       </button>
                     ))}
                   </div>
                 </div>
               )}
+
+              <p className="text-[12px] text-[var(--muted)] leading-relaxed">
+                {facilityKind === 'overdraft'
+                  ? 'Request an overdraft on your wallet — subject to approval.'
+                  : 'Request a quick loan disbursed to your personal wallet after approval.'}
+              </p>
+              <p className="text-[11px] text-[var(--muted)]">
+                {facilityKind === 'overdraft'
+                  ? `Current authorized limit: ₦${overdraftLimit.toLocaleString()}.`
+                  : `Selected tenor: ${loanTenor}.`}
+              </p>
 
               <button
                 type="button"
@@ -482,7 +592,7 @@ export const AskMoneyScreen: React.FC = () => {
                       </button>
                       <button
                         type="button"
-                        onClick={() => declineMoneyRequest(req.id)}
+                        onClick={() => void declineMoneyRequest(req.id)}
                         className="px-4 h-10 rounded-2xl glass-chip !rounded-2xl text-rose-600 dark:text-rose-400 text-[12px] font-semibold active:scale-[0.98]"
                       >
                         Decline
@@ -557,11 +667,11 @@ export const AskMoneyScreen: React.FC = () => {
                   </p>
                 )}
 
-                {req.status === 'Pending' && (
+                {req.status === 'Pending' && req.type === 'contact' && (
                   <div className="flex justify-end pt-1">
                     <button
                       type="button"
-                      onClick={() => cancelMoneyRequest(req.id)}
+                      onClick={() => void cancelMoneyRequest(req.id)}
                       className="text-[12px] font-semibold text-rose-600 dark:text-rose-400"
                     >
                       Cancel request
@@ -597,59 +707,79 @@ export const AskMoneyScreen: React.FC = () => {
               <div className="text-3xl font-mono font-semibold text-[var(--text)] tracking-tight">₦{amountStr}</div>
               <p className="text-[12px] text-[var(--muted)] mt-1">
                 {requestKind === 'contact'
-                  ? `Asking from ${recipientName || phone}`
+                  ? `From ${recipientName || phone || 'contact'}`
                   : facilityKind === 'overdraft'
                   ? 'Request an overdraft on your wallet — subject to approval.'
-                  : `Repayment tenor: ${loanTenor}`}
+                  : `Quick loan • ${loanTenor}`}
               </p>
             </div>
 
-            <div className="grid grid-cols-3 gap-2 max-w-xs mx-auto">
-              {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(digit => (
+            {showConfirmSummary ? (
+              <div className="space-y-3">
+                <div className="rounded-2xl border border-[var(--glass-border)] bg-black/[0.03] dark:bg-white/[0.05] px-4 py-3 text-[12px] text-[var(--muted)] space-y-1">
+                  <p>
+                    Amount:{' '}
+                    <span className="font-mono font-semibold text-[var(--text)]">₦{amountStr}</span>
+                  </p>
+                  {requestKind === 'contact' && (
+                    <p>
+                      To: <span className="text-[var(--text)]">{recipientName || phone}</span>
+                    </p>
+                  )}
+                </div>
                 <button
-                  key={digit}
                   type="button"
-                  onClick={() => handleNumericKey(digit)}
-                  className="h-11 rounded-2xl glass-chip !rounded-2xl text-[var(--text)] font-mono text-lg font-semibold active:scale-95 transition-transform"
+                  disabled={submitting}
+                  onClick={() => void handleSendRequest()}
+                  className="w-full h-12 rounded-2xl bg-[var(--accent)] text-white text-[15px] font-semibold disabled:opacity-60"
                 >
-                  {digit}
+                  {submitting
+                    ? 'Sending…'
+                    : requestKind === 'contact'
+                    ? 'Send request'
+                    : facilityKind === 'overdraft'
+                    ? 'Request overdraft'
+                    : 'Request loan'}
                 </button>
-              ))}
-              <button
-                type="button"
-                onClick={() => setAmountStr('5,000')}
-                className="h-11 rounded-2xl glass-chip !rounded-2xl text-[11px] text-[var(--accent)] font-mono font-semibold"
-              >
-                ₦5k
-              </button>
-              <button
-                type="button"
-                onClick={() => handleNumericKey('0')}
-                className="h-11 rounded-2xl glass-chip !rounded-2xl text-[var(--text)] font-mono text-lg font-semibold active:scale-95 transition-transform"
-              >
-                0
-              </button>
-              <button
-                type="button"
-                onClick={handleBackspace}
-                className="h-11 rounded-2xl glass-chip !rounded-2xl text-[var(--muted)] flex items-center justify-center active:scale-95 transition-transform"
-              >
-                <Icon name="arrow_back" size={18} />
-              </button>
-            </div>
-
-            <button
-              type="button"
-              onClick={handleSendRequest}
-              className="w-full h-12 rounded-2xl bg-[var(--accent)] text-white text-[15px] font-semibold flex items-center justify-center gap-2 shadow-lg shadow-[var(--accent)]/25 active:scale-[0.98] transition-transform"
-            >
-              {requestKind === 'contact'
-                ? `Send request (₦${amountStr})`
-                : facilityKind === 'overdraft'
-                ? 'Request overdraft'
-                : 'Request loan'}
-              <Icon name="arrow_forward" size={18} />
-            </button>
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmSummary(false)}
+                  className="w-full text-[12px] font-semibold text-[var(--muted)]"
+                >
+                  Edit amount
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-3 gap-2.5">
+                  {['1', '2', '3', '4', '5', '6', '7', '8', '9', '00', '0'].map(k => (
+                    <button
+                      key={k}
+                      type="button"
+                      onClick={() => handleNumericKey(k)}
+                      className="h-12 rounded-2xl glass-chip !rounded-2xl text-[18px] font-mono font-semibold text-[var(--text)] active:scale-[0.97]"
+                    >
+                      {k}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={handleBackspace}
+                    className="h-12 rounded-2xl glass-chip !rounded-2xl text-[var(--muted)] flex items-center justify-center active:scale-[0.97]"
+                    aria-label="Backspace"
+                  >
+                    <Icon name="delete" size={20} />
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmSummary(true)}
+                  className="w-full h-12 rounded-2xl bg-[var(--accent)] text-white text-[15px] font-semibold"
+                >
+                  Continue
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -660,12 +790,18 @@ export const AskMoneyScreen: React.FC = () => {
           setIsPinOpen(false);
           setActiveAcceptRequestId(null);
         }}
-        title="Authorize Peer Payment"
-        recipient={activeRequestForPin?.requesterName}
-        amount={activeRequestForPin?.amount}
-        subtitle="Money will be transferred from your wallet immediately."
-        onSuccess={handlePinSuccess}
+        onSuccess={pin => void handlePinSuccess(pin)}
+        title="Confirm payment"
+        subtitle={
+          activeRequestForPin
+            ? `Pay ₦${activeRequestForPin.amount.toLocaleString()} to ${activeRequestForPin.requesterName}`
+            : 'Enter your 4-digit PIN'
+        }
       />
+
+      <button type="button" onClick={navigateBack} className="sr-only">
+        Back
+      </button>
     </main>
   );
 };

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useTransactions } from '../../context/TransactionContext';
 import { Transaction } from '../../types';
 import { Icon } from '../Icon';
@@ -7,6 +7,21 @@ import {
   downloadTransferReceiptPdf,
   shareTransferReceiptImage,
 } from '../../lib/transferReceipt';
+
+function moneyParts(n: number) {
+  const [whole, frac = '00'] = Math.abs(n)
+    .toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    .split('.');
+  return { whole, frac };
+}
+
+function isTodayLabel(date: string) {
+  return /\btoday\b/i.test(date);
+}
+
+function isYesterdayLabel(date: string) {
+  return /\byesterday\b/i.test(date);
+}
 
 function todayTxIconName(tx: Transaction): string {
   if (tx.category === 'bill') return 'bolt';
@@ -59,11 +74,45 @@ export const HistoryScreen: React.FC = () => {
     return true;
   });
 
-  const todayTxs = filteredTxs.filter(tx => tx.date.includes('Today'));
-  const yesterdayTxs = filteredTxs.filter(tx => tx.date.includes('Yesterday'));
+  const todayTxs = filteredTxs.filter(tx => isTodayLabel(tx.date));
+  const yesterdayTxs = filteredTxs.filter(tx => isYesterdayLabel(tx.date));
   const otherTxs = filteredTxs.filter(
-    tx => !tx.date.includes('Today') && !tx.date.includes('Yesterday')
+    tx => !isTodayLabel(tx.date) && !isYesterdayLabel(tx.date)
   );
+
+  const cashflow = useMemo(() => {
+    const monthStart = new Date();
+    monthStart.setDate(1);
+    monthStart.setHours(0, 0, 0, 0);
+
+    const inMonth = transactions.filter(tx => {
+      const raw = (tx as Transaction & { occurredAt?: string }).occurredAt;
+      if (raw) {
+        const d = new Date(raw);
+        return !Number.isNaN(d.getTime()) && d >= monthStart;
+      }
+      // Fallback: include all loaded txs when occurredAt is missing
+      return true;
+    });
+
+    const outflow = inMonth
+      .filter(tx => tx.type === 'debit')
+      .reduce((sum, tx) => sum + (Number(tx.amount) || 0), 0);
+    const inflow = inMonth
+      .filter(tx => tx.type === 'credit')
+      .reduce((sum, tx) => sum + (Number(tx.amount) || 0), 0);
+    const debitCount = inMonth.filter(tx => tx.type === 'debit').length;
+    const netPct = outflow === 0 ? (inflow > 0 ? 100 : 0) : ((inflow - outflow) / outflow) * 100;
+    const monthLabel = new Date().toLocaleDateString('en-US', {
+      month: 'long',
+      year: 'numeric',
+    });
+
+    return { outflow, inflow, debitCount, netPct, monthLabel };
+  }, [transactions]);
+
+  const outflowParts = moneyParts(cashflow.outflow);
+  const inflowParts = moneyParts(cashflow.inflow);
 
   const copyToken = (token: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -252,12 +301,14 @@ export const HistoryScreen: React.FC = () => {
           <div className="flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-[var(--accent)] animate-pulse" />
             <span className="text-[10px] uppercase tracking-[0.22em] font-medium text-[var(--muted)]">
-              September 2026 cashflow
+              {cashflow.monthLabel} cashflow
             </span>
           </div>
           <button
             type="button"
-            onClick={() => showToast('Statement Download', 'September statement downloaded.', 'success')}
+            onClick={() =>
+              showToast('Statement Download', `${cashflow.monthLabel} statement downloaded.`, 'success')
+            }
             className="text-[12px] font-semibold text-[var(--accent)] flex items-center gap-0.5 active:scale-[0.98] transition-transform"
           >
             Statement
@@ -272,10 +323,11 @@ export const HistoryScreen: React.FC = () => {
               <span>Total outflow</span>
             </div>
             <div className="mt-1 font-mono text-sm text-[var(--text)] font-semibold tracking-tight">
-              ₦2,234,961<span className="text-[var(--muted)] text-xs">.53</span>
+              ₦{outflowParts.whole}
+              <span className="text-[var(--muted)] text-xs">.{outflowParts.frac}</span>
             </div>
             <span className="mt-1.5 inline-block text-[10px] text-[var(--muted)] glass-chip !rounded-full !px-2 !py-0.5">
-              68 txns
+              {cashflow.debitCount} txn{cashflow.debitCount === 1 ? '' : 's'}
             </span>
           </div>
           <div className="glass-chip !rounded-[18px] p-3 border border-[var(--glass-border)]">
@@ -284,10 +336,12 @@ export const HistoryScreen: React.FC = () => {
               <span>Total inflow</span>
             </div>
             <div className="mt-1 font-mono text-sm text-emerald-600 dark:text-emerald-400 font-semibold tracking-tight">
-              ₦2,369,550<span className="opacity-70 text-xs">.00</span>
+              ₦{inflowParts.whole}
+              <span className="opacity-70 text-xs">.{inflowParts.frac}</span>
             </div>
             <span className="mt-1.5 inline-block text-[10px] text-emerald-600 dark:text-emerald-400 glass-chip !rounded-full !px-2 !py-0.5">
-              +6.0% net
+              {cashflow.netPct >= 0 ? '+' : ''}
+              {cashflow.netPct.toFixed(1)}% net
             </span>
           </div>
         </div>

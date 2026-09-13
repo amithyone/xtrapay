@@ -127,11 +127,12 @@ export const LoansScreen: React.FC = () => {
     setPinOpen(true);
   };
 
-  const onPinSuccess = () => {
+  const onPinSuccess = async (pin: string) => {
     setPinOpen(false);
     if (pinMode === 'request') {
       const n = Number(amount.replace(/,/g, ''));
-      requestFacility({ kind: 'loan', amount: n, tenor });
+      const ok = await requestFacility({ kind: 'loan', amount: n, tenor, pin });
+      if (!ok) return;
       setLoans(prev => [
         {
           id: `ln-${Date.now()}`,

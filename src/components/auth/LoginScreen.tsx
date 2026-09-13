@@ -4,10 +4,11 @@ import { Icon } from '../Icon';
 
 interface LoginScreenProps {
   onBack?: () => void;
-  onLogin: (payload: { identifier: string; password: string }) => void;
+  onLogin: (payload: { identifier: string; password: string }) => void | Promise<void>;
   onForgot: () => void;
   onRegister: () => void;
   onPoweredBy?: () => void;
+  loading?: boolean;
 }
 
 export const LoginScreen: React.FC<LoginScreenProps> = ({
@@ -16,19 +17,21 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   onForgot,
   onRegister,
   onPoweredBy,
+  loading = false,
 }) => {
-  const [identifier, setIdentifier] = useState('08034129981');
-  const [password, setPassword] = useState('password');
+  const [identifier, setIdentifier] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
 
   const submit = () => {
+    if (loading) return;
     if (!identifier.trim() || !password.trim()) {
       setError('Enter your phone/email and password.');
       return;
     }
     setError('');
-    onLogin({ identifier: identifier.trim(), password });
+    void onLogin({ identifier: identifier.trim(), password });
   };
 
   return (
@@ -43,7 +46,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
             <button
               type="button"
               onClick={onRegister}
-              className="settings-row font-semibold text-[var(--accent)] appearance-none border-0 bg-transparent cursor-pointer p-0"
+              disabled={loading}
+              className="settings-row font-semibold text-[var(--accent)] appearance-none border-0 bg-transparent cursor-pointer p-0 disabled:opacity-50"
             >
               Create account
             </button>
@@ -61,7 +65,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
               <button
                 type="button"
                 onClick={onPoweredBy}
-                className="settings-row appearance-none border-0 bg-transparent cursor-pointer p-0 text-[10px] tracking-wide text-[var(--muted)]/80 underline underline-offset-2 decoration-[var(--glass-border)]"
+                disabled={loading}
+                className="settings-row appearance-none border-0 bg-transparent cursor-pointer p-0 text-[10px] tracking-wide text-[var(--muted)]/80 underline underline-offset-2 decoration-[var(--glass-border)] disabled:opacity-50"
               >
                 Powered by CheckoutNow
               </button>
@@ -78,6 +83,10 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         onChange={e => setIdentifier(e.target.value)}
         placeholder="Phone number or email"
         autoComplete="username"
+        disabled={loading}
+        onKeyDown={e => {
+          if (e.key === 'Enter') submit();
+        }}
       />
       <div className="relative">
         <input
@@ -87,11 +96,16 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
           onChange={e => setPassword(e.target.value)}
           placeholder="Password"
           autoComplete="current-password"
+          disabled={loading}
+          onKeyDown={e => {
+            if (e.key === 'Enter') submit();
+          }}
         />
         <button
           type="button"
           onClick={() => setShowPassword(v => !v)}
-          className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--muted)]"
+          disabled={loading}
+          className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--muted)] disabled:opacity-50"
           aria-label={showPassword ? 'Hide password' : 'Show password'}
         >
           <Icon name={showPassword ? 'visibility_off' : 'visibility'} size={18} />
@@ -102,7 +116,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         <button
           type="button"
           onClick={onForgot}
-          className="settings-row text-[12px] font-semibold text-[var(--accent)] appearance-none border-0 bg-transparent cursor-pointer p-0"
+          disabled={loading}
+          className="settings-row text-[12px] font-semibold text-[var(--accent)] appearance-none border-0 bg-transparent cursor-pointer p-0 disabled:opacity-50"
         >
           Forgot password?
         </button>
@@ -110,8 +125,21 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
 
       {error && <p className="text-[12px] text-rose-500">{error}</p>}
 
-      <button type="button" onClick={submit} className="glass-cta w-full !rounded-2xl">
-        Sign in
+      <button
+        type="button"
+        onClick={submit}
+        disabled={loading}
+        aria-busy={loading}
+        className="glass-cta w-full !rounded-2xl disabled:opacity-60 disabled:pointer-events-none flex items-center justify-center gap-2"
+      >
+        {loading ? (
+          <>
+            <Icon name="sync" size={18} className="animate-spin" />
+            Signing in…
+          </>
+        ) : (
+          'Sign in'
+        )}
       </button>
     </AuthShell>
   );

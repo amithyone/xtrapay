@@ -80,6 +80,8 @@ export interface Transaction {
   token?: string; // e.g. "4590-2391-4920-1182" for electricity
   bank?: string;
   recipient?: string;
+  /** Destination NUBAN when category is transfer (for Recent recipients) */
+  accountNumber?: string;
   cardLast4?: string;
   cardUsdAmount?: string;
   note?: string;
@@ -175,6 +177,8 @@ export interface NearbyPeer {
   distance: string;
   walletTag: string;
   avatarColor: string;
+  /** BLE / pay token used to resolve recipient on send */
+  bleToken?: string;
 }
 
 export interface ShopTerminal {
@@ -184,4 +188,11 @@ export interface ShopTerminal {
   amount?: number;
   merchantCategory: string;
   rssi: string;
+  distance?: string;
+  signalStrength?: string;
+  sessionUuid?: string;
+  sessionKind?: 'pos_checkout' | 'presence';
+  accountNumber?: string;
+  bankCode?: string;
+  recipientName?: string;
 }

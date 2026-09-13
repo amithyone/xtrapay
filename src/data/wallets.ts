@@ -9,6 +9,10 @@ export interface WalletAccount {
   balance: number;
   /** Short line under the name in the switcher */
   subtitle: string;
+  /** Legal / receive account name on the VA (optional; falls back to profile name) */
+  accountName?: string;
+  /** Optional dial string for USSD routing */
+  ussd?: string;
 }
 
 export const INITIAL_WALLETS: WalletAccount[] = [

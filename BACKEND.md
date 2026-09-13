@@ -337,7 +337,7 @@ Frontend flow today: Intro (client) → Login / Register(basic) → KYC → OTP 
 | POST | `/terminals/:id/unlock` | Unlock |
 | POST | `/terminals/:id/address-request` | Update address |
 
----
+
 
 ## 8. Loans, limits, network, support
 

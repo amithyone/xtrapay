@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useTransactions } from '../../context/TransactionContext';
-import { INITIAL_BENEFICIARIES } from '../../data/initialData';
+import type { Beneficiary } from '../../types';
 import { ApiError } from '../../lib/api';
 import { apiNameEnquiry } from '../../lib/xtrapayApi';
 import { Icon } from '../Icon';
@@ -15,6 +15,8 @@ export const TransferScreen: React.FC = () => {
     selectedWalletId,
     banks,
     banksLoading,
+    beneficiaries,
+    transactions,
     initiateTransfer,
     setActiveScreen,
     showToast,
@@ -38,6 +40,9 @@ export const TransferScreen: React.FC = () => {
   const [bankQuery, setBankQuery] = useState('');
   const [pinOpen, setPinOpen] = useState(false);
   const nameEnquirySeq = useRef(0);
+  /** Skip auto name-enquiry for this acct|bank after one failure until the user changes either value. */
+  const failedNameEnquiryKey = useRef<string | null>(null);
+  const succeededNameEnquiryKey = useRef<string | null>(null);
 
   // Always default debit account to the account currently in view
   useEffect(() => {
@@ -79,8 +84,22 @@ export const TransferScreen: React.FC = () => {
 
   useEffect(() => {
     if (channel !== 'bank') return;
+
     const acct = accountNumber.replace(/\D/g, '');
+    // Only enquire when NUBAN is exactly 10 digits and a bank code is known.
     if (acct.length !== 10 || !selectedBankMeta?.code) {
+      return;
+    }
+
+    const key = `${acct}|${selectedBankMeta.code}`;
+
+    // After a failed attempt, do not retry the same account+bank until the user changes values.
+    if (failedNameEnquiryKey.current === key) {
+      return;
+    }
+
+    // Do not re-hit the API for a combo that already resolved successfully.
+    if (succeededNameEnquiryKey.current === key) {
       return;
     }
 
@@ -97,9 +116,13 @@ export const TransferScreen: React.FC = () => {
             bankName: selectedBankMeta.name,
           });
           if (seq !== nameEnquirySeq.current) return;
+          failedNameEnquiryKey.current = null;
+          succeededNameEnquiryKey.current = key;
           setRecipientName(result.accountName);
         } catch (err) {
           if (seq !== nameEnquirySeq.current) return;
+          failedNameEnquiryKey.current = key;
+          succeededNameEnquiryKey.current = null;
           setRecipientName('');
           const msg =
             err instanceof ApiError
@@ -145,12 +168,47 @@ export const TransferScreen: React.FC = () => {
   const money = (n: number) =>
     `₦${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-  const handleSelectBeneficiary = (ben: (typeof INITIAL_BENEFICIARIES)[0]) => {
+  const handleSelectBeneficiary = (ben: Beneficiary) => {
     setAccountNumber(ben.accountNumber);
     setSelectedBank(ben.bank);
     setRecipientName('');
     showToast('Beneficiary Selected', `${ben.name} (${ben.bank}) — verifying name…`);
   };
+
+  /** Recent recipients: saved beneficiaries first, then unique people from live transfer ledger. */
+  const recentRecipients = useMemo(() => {
+    const byAcct = new Map<string, Beneficiary>();
+
+    for (const ben of beneficiaries) {
+      const key = ben.accountNumber.replace(/\D/g, '');
+      if (key.length >= 10) byAcct.set(key, ben);
+    }
+
+    for (const tx of transactions) {
+      if (tx.category !== 'transfer' || tx.type !== 'debit') continue;
+      const acct = (tx.accountNumber || '').replace(/\D/g, '');
+      if (acct.length < 10 || byAcct.has(acct)) continue;
+      const name = tx.recipient || tx.title.replace(/^Transfer to\s+/i, '') || 'Recipient';
+      byAcct.set(acct, {
+        id: `tx-ben-${tx.id}`,
+        name,
+        initials: name
+          .trim()
+          .split(/\s+/)
+          .filter(Boolean)
+          .slice(0, 2)
+          .map(p => p[0] ?? '')
+          .join('')
+          .toUpperCase() || '??',
+        bank: tx.bank || 'Bank',
+        accountNumber: acct,
+        tier: 'Recent',
+        colorClass: 'text-[var(--accent)]',
+      });
+    }
+
+    return Array.from(byAcct.values()).slice(0, 12);
+  }, [beneficiaries, transactions]);
 
   const handleQuickAmount = (val: number) => {
     setAmountStr(val.toLocaleString());
@@ -321,7 +379,17 @@ export const TransferScreen: React.FC = () => {
           <button
             type="button"
             aria-label="Beneficiaries"
-            onClick={() => handleSelectBeneficiary(INITIAL_BENEFICIARIES[0])}
+            onClick={() => {
+              if (recentRecipients[0]) {
+                handleSelectBeneficiary(recentRecipients[0]);
+              } else {
+                showToast(
+                  'No recent recipients',
+                  'Complete a transfer and they will show up here.',
+                  'info'
+                );
+              }
+            }}
             className="frosted-pad !h-12 !w-12 !min-h-12 !min-w-12 !rounded-2xl text-[var(--accent)] shrink-0"
             title="Quick beneficiary"
           >
@@ -434,23 +502,29 @@ export const TransferScreen: React.FC = () => {
           </button>
         </div>
         <div className="flex gap-3 overflow-x-auto no-scrollbar pb-1">
-          {INITIAL_BENEFICIARIES.map(ben => (
-            <button
-              key={ben.id}
-              type="button"
-              onClick={() => handleSelectBeneficiary(ben)}
-              className="settings-row flex w-[4.25rem] shrink-0 flex-col items-center gap-2 cursor-pointer appearance-none border-0 bg-transparent p-0"
-            >
-              <span
-                className={`flex h-12 w-12 items-center justify-center rounded-full border border-[var(--glass-border)] bg-white/50 dark:bg-white/8 text-[12px] font-bold ${ben.colorClass}`}
+          {recentRecipients.length === 0 ? (
+            <p className="text-[12px] text-[var(--muted)] px-0.5 py-3">
+              No recent transfer recipients yet. People you send to will appear here.
+            </p>
+          ) : (
+            recentRecipients.map(ben => (
+              <button
+                key={ben.id}
+                type="button"
+                onClick={() => handleSelectBeneficiary(ben)}
+                className="settings-row flex w-[4.25rem] shrink-0 flex-col items-center gap-2 cursor-pointer appearance-none border-0 bg-transparent p-0"
               >
-                {ben.initials}
-              </span>
-              <span className="w-full truncate text-center text-[10px] font-bold text-[var(--text)]">
-                {ben.name.split(' ')[0]}
-              </span>
-            </button>
-          ))}
+                <span
+                  className={`flex h-12 w-12 items-center justify-center rounded-full border border-[var(--glass-border)] bg-white/50 dark:bg-white/8 text-[12px] font-bold ${ben.colorClass}`}
+                >
+                  {ben.initials}
+                </span>
+                <span className="w-full truncate text-center text-[10px] font-bold text-[var(--text)]">
+                  {ben.name.split(' ')[0]}
+                </span>
+              </button>
+            ))
+          )}
         </div>
       </section>
 

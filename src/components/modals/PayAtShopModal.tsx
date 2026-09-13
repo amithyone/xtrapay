@@ -1,52 +1,91 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useTransactions } from '../../context/TransactionContext';
-import { SHOP_TERMINALS } from '../../data/initialData';
+import { apiShopsNearby } from '../../lib/xtrapayApi';
 import { ShopTerminal } from '../../types';
 import { Icon } from '../Icon';
 import { PinSheetModal } from '../common/PinSheetModal';
 
 export const PayAtShopModal: React.FC = () => {
-  const {
-    isPayAtShopOpen,
-    setIsPayAtShopOpen,
-    executeShopPayment,
-    showToast,
-  } = useTransactions();
+  const { isPayAtShopOpen, setIsPayAtShopOpen, executeShopPayment, showToast } = useTransactions();
 
-  const [terminals, setTerminals] = useState<ShopTerminal[]>(SHOP_TERMINALS);
+  const [terminals, setTerminals] = useState<ShopTerminal[]>([]);
+  const [listening, setListening] = useState(false);
   const [selectedShop, setSelectedShop] = useState<ShopTerminal | null>(null);
-  const [customAmountStr, setCustomAmountStr] = useState<string>('3,200');
-  const [isAmountModalOpen, setIsAmountModalOpen] = useState<boolean>(false);
-  const [isPinOpen, setIsPinOpen] = useState<boolean>(false);
+  const [customAmountStr, setCustomAmountStr] = useState('3,200');
+  const [isAmountModalOpen, setIsAmountModalOpen] = useState(false);
+  const [isPinOpen, setIsPinOpen] = useState(false);
+  const openRef = useRef(false);
+
+  useEffect(() => {
+    openRef.current = isPayAtShopOpen;
+    if (!isPayAtShopOpen) {
+      setTerminals([]);
+      setSelectedShop(null);
+      setListening(false);
+      return;
+    }
+    void listenForTills();
+  }, [isPayAtShopOpen]);
+
+  const listenForTills = async () => {
+    setListening(true);
+    try {
+      const rows = await apiShopsNearby();
+      if (!openRef.current) return;
+      setTerminals(
+        rows.map(r => ({
+          id: r.id || r.terminalId,
+          name: r.name,
+          terminalId: r.terminalId,
+          amount: r.amount ?? undefined,
+          merchantCategory: r.merchantCategory || 'Retail',
+          rssi: r.rssi || '—',
+          distance: r.distance,
+          signalStrength: r.rssi,
+          sessionUuid: r.sessionUuid,
+          sessionKind: r.sessionKind,
+          accountNumber: r.accountNumber,
+          bankCode: r.bankCode,
+          recipientName: r.name,
+        }))
+      );
+    } finally {
+      if (openRef.current) setListening(false);
+    }
+  };
 
   if (!isPayAtShopOpen) return null;
 
   const handlePayTerminal = (shop: ShopTerminal) => {
     setSelectedShop(shop);
-    if (shop.amount) {
+    if (shop.amount && shop.amount > 0) {
       setIsPinOpen(true);
     } else {
       setIsAmountModalOpen(true);
     }
   };
 
-  const handleAmountSubmit = () => {
-    setIsAmountModalOpen(false);
-    setIsPinOpen(true);
-  };
-
-  const handlePinSuccess = (pin: string) => {
-    if (selectedShop) {
-      const amountToPay = selectedShop.amount || parseFloat(customAmountStr.replace(/,/g, '')) || 0;
-      const ok = executeShopPayment(selectedShop, amountToPay, pin);
-      if (ok) {
-        setIsPinOpen(false);
-        setIsPayAtShopOpen(false);
-      }
+  const handlePinSuccess = async (pin: string) => {
+    if (!selectedShop) return;
+    const amountToPay =
+      selectedShop.amount && selectedShop.amount > 0
+        ? selectedShop.amount
+        : parseFloat(customAmountStr.replace(/,/g, '')) || 0;
+    if (amountToPay <= 0) {
+      showToast('Enter amount', 'Enter the bill total to continue.', 'warning');
+      return;
+    }
+    const ok = await executeShopPayment(selectedShop, amountToPay, pin);
+    if (ok) {
+      setIsPinOpen(false);
+      setIsPayAtShopOpen(false);
     }
   };
 
-  const currentAmount = selectedShop?.amount || parseFloat(customAmountStr.replace(/,/g, '')) || 0;
+  const currentAmount =
+    selectedShop?.amount && selectedShop.amount > 0
+      ? selectedShop.amount
+      : parseFloat(customAmountStr.replace(/,/g, '')) || 0;
 
   return (
     <div className="app-modal-overlay z-[70] bg-black/75 backdrop-blur-md animate-fadeIn">
@@ -54,7 +93,6 @@ export const PayAtShopModal: React.FC = () => {
         className="app-modal-panel bg-[#181c24] border border-[#464554]/40 p-6 shadow-2xl space-y-4 animate-slideUp text-left"
         id="pay-at-shop-modal"
       >
-        {/* Header */}
         <div className="flex items-center justify-between pb-2 border-b border-[#464554]/20">
           <div className="flex items-center space-x-2">
             <span className="w-8 h-8 rounded-full bg-[#4edea3]/20 text-[#4edea3] flex items-center justify-center">
@@ -74,7 +112,6 @@ export const PayAtShopModal: React.FC = () => {
           </button>
         </div>
 
-        {/* Radar Scanning Status */}
         <div className="p-3 rounded-xl bg-[#1c2028] border border-[#464554]/30 flex items-center justify-between text-xs">
           <div className="flex items-center space-x-2.5">
             <span className="relative flex h-3 w-3">
@@ -82,87 +119,94 @@ export const PayAtShopModal: React.FC = () => {
               <span className="relative inline-flex rounded-full h-3 w-3 bg-[#4edea3]"></span>
             </span>
             <div>
-              <p className="text-[#dfe2ee] font-semibold">Listening for nearby tills...</p>
-              <p className="text-[10px] text-[#908fa0]">BLE Beacon detection active</p>
+              <p className="text-[#dfe2ee] font-semibold">
+                {listening ? 'Listening for nearby tills…' : 'Till scan'}
+              </p>
+              <p className="text-[10px] text-[#908fa0]">
+                BLE on native · optional GET /shops/nearby on web
+              </p>
             </div>
           </div>
-          <span className="text-[10px] text-[#4edea3] font-mono px-2 py-0.5 rounded-full bg-[#4edea3]/10 border border-[#4edea3]/20">
-            Scanning
-          </span>
+          <button
+            type="button"
+            onClick={() => void listenForTills()}
+            className="text-[10px] text-[#4edea3] font-mono px-2 py-0.5 rounded-full bg-[#4edea3]/10 border border-[#4edea3]/20"
+          >
+            Refresh
+          </button>
         </div>
 
         <p className="text-[11px] text-[#908fa0] px-1">
-          When you stand at the checkout register, Checkout tills broadcast your basket bill directly to your phone.
+          Checkout tills broadcast a signed basket (or idle presence). Verified tills appear below —
+          pay with your transaction PIN.
         </p>
 
-        {/* Candidate Terminals List */}
         <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
-          {terminals.map(shop => {
-            const hasAmount = Boolean(shop.amount);
-            return (
-              <div
-                key={shop.id}
-                className="p-3.5 rounded-xl bg-[#1c2028] border border-[#464554]/30 flex items-center justify-between hover:border-[#4edea3]/60 transition-all group"
-              >
-                <div className="flex items-center space-x-3">
-                  <div className="w-10 h-10 rounded-xl bg-[#262a33] text-[#4edea3] flex items-center justify-center border border-[#464554]/30">
-                    <Icon name="store" size={20} />
-                  </div>
-                  <div>
-                    <div className="flex items-center space-x-1.5">
-                      <h4 className="text-xs font-bold text-[#dfe2ee]">{shop.name}</h4>
-                      <span className="text-[9px] px-1 py-0.2 rounded bg-[#31353e] text-[#908fa0] font-mono">
-                        {shop.terminalId}
-                      </span>
+          {terminals.length === 0 ? (
+            <div className="p-5 rounded-xl bg-[#1c2028] border border-[#464554]/30 text-center space-y-2">
+              <Icon name="store" size={28} className="text-[#908fa0] mx-auto opacity-70" />
+              <p className="text-xs font-semibold text-[#dfe2ee]">No tills nearby</p>
+              <p className="text-[11px] text-[#908fa0]">
+                Stand at a Checkout till, or wait until the backend returns live shop sessions on{' '}
+                <span className="font-mono">/shops/nearby</span>.
+              </p>
+            </div>
+          ) : (
+            terminals.map(shop => {
+              const hasAmount = Boolean(shop.amount && shop.amount > 0);
+              return (
+                <div
+                  key={shop.id}
+                  className="p-3.5 rounded-xl bg-[#1c2028] border border-[#464554]/30 flex items-center justify-between"
+                >
+                  <div className="flex items-center space-x-3 min-w-0">
+                    <div className="w-10 h-10 rounded-xl bg-[#262a33] text-[#4edea3] flex items-center justify-center border border-[#464554]/30">
+                      <Icon name="store" size={20} />
                     </div>
-                    <p className="text-[10px] text-[#908fa0]">
-                      {shop.distance} • {shop.signalStrength}
-                    </p>
+                    <div className="min-w-0">
+                      <div className="flex items-center space-x-1.5">
+                        <h4 className="text-xs font-bold text-[#dfe2ee] truncate">{shop.name}</h4>
+                        <span className="text-[9px] px-1 rounded bg-[#31353e] text-[#908fa0] font-mono">
+                          {shop.terminalId}
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-[#908fa0]">
+                        {shop.sessionKind === 'presence' || !hasAmount
+                          ? 'Enter amount'
+                          : shop.merchantCategory}
+                      </p>
+                    </div>
                   </div>
-                </div>
-
-                <div className="text-right flex flex-col items-end space-y-1">
-                  {hasAmount ? (
-                    <>
-                      <span className="font-mono text-xs font-bold text-[#4edea3]">
-                        ₦{shop.amount?.toLocaleString()}
-                      </span>
+                  <div className="text-right flex flex-col items-end space-y-1">
+                    {hasAmount ? (
+                      <>
+                        <span className="font-mono text-xs font-bold text-[#4edea3]">
+                          ₦{shop.amount?.toLocaleString()}
+                        </span>
+                        <button
+                          onClick={() => handlePayTerminal(shop)}
+                          className="h-7 px-3 rounded-lg bg-[#4edea3] text-[#003822] text-xs font-bold"
+                          type="button"
+                        >
+                          Pay Bill
+                        </button>
+                      </>
+                    ) : (
                       <button
                         onClick={() => handlePayTerminal(shop)}
-                        className="h-7 px-3 rounded-lg bg-[#4edea3] hover:bg-[#5cecb2] text-[#003822] text-xs font-bold transition-all active:scale-95 cursor-pointer"
-                        type="button"
-                      >
-                        Pay Bill
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <span className="text-[10px] text-[#908fa0]">Manual Till</span>
-                      <button
-                        onClick={() => handlePayTerminal(shop)}
-                        className="h-7 px-3 rounded-lg bg-[#262a33] hover:bg-[#31353e] text-[#c0c1ff] border border-[#8083ff]/40 text-xs font-medium transition-all active:scale-95 cursor-pointer"
+                        className="h-7 px-3 rounded-lg bg-[#262a33] text-[#c0c1ff] border border-[#8083ff]/40 text-xs font-medium"
                         type="button"
                       >
                         Enter Amount
                       </button>
-                    </>
-                  )}
+                    )}
+                  </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })
+          )}
         </div>
 
-        {/* Security / Permissions Footer */}
-        <div className="pt-2 border-t border-[#464554]/20 flex items-center justify-between text-[10px] text-[#908fa0]">
-          <span className="flex items-center space-x-1">
-            <Icon name="verified_user" size={13} className="text-[#4edea3]" />
-            <span>Encrypted POS Handshake</span>
-          </span>
-          <span>Instant electronic till receipt</span>
-        </div>
-
-        {/* MANUAL AMOUNT MODAL */}
         {isAmountModalOpen && selectedShop && (
           <div className="app-modal-overlay z-[80] bg-black/80 backdrop-blur-md animate-fadeIn">
             <div className="app-modal-panel bg-[#181c24] border border-[#464554]/40 p-6 shadow-2xl space-y-4 animate-slideUp">
@@ -178,7 +222,6 @@ export const PayAtShopModal: React.FC = () => {
                   <Icon name="close" size={18} />
                 </button>
               </div>
-
               <div className="text-center py-2">
                 <span className="text-xs text-[#908fa0] block">Enter Bill Total</span>
                 <input
@@ -187,24 +230,21 @@ export const PayAtShopModal: React.FC = () => {
                   onChange={e => setCustomAmountStr(e.target.value)}
                   className="w-full text-center text-3xl font-mono font-bold text-[#4edea3] bg-transparent focus:outline-none"
                 />
-                <p className="text-[11px] text-[#908fa0] mt-1">
-                  Check cashier display for exact total
-                </p>
               </div>
-
               <button
-                onClick={handleAmountSubmit}
-                className="w-full h-12 rounded-xl bg-[#4edea3] text-[#003822] text-sm font-bold flex items-center justify-center space-x-2 shadow-lg hover:brightness-110 active:scale-98 transition-all cursor-pointer"
+                onClick={() => {
+                  setIsAmountModalOpen(false);
+                  setIsPinOpen(true);
+                }}
+                className="w-full h-12 rounded-xl bg-[#4edea3] text-[#003822] text-sm font-bold"
                 type="button"
               >
-                <span>Proceed to Authorize (PIN)</span>
-                <Icon name="arrow_forward" size={18} />
+                Proceed to Authorize (PIN)
               </button>
             </div>
           </div>
         )}
 
-        {/* PIN AUTHORIZATION */}
         <PinSheetModal
           isOpen={isPinOpen}
           onClose={() => setIsPinOpen(false)}
@@ -212,7 +252,7 @@ export const PayAtShopModal: React.FC = () => {
           recipient={selectedShop?.name}
           amount={currentAmount}
           subtitle={`Checkout Till: ${selectedShop?.terminalId}`}
-          onSuccess={handlePinSuccess}
+          onSuccess={pin => void handlePinSuccess(pin)}
         />
       </div>
     </div>
