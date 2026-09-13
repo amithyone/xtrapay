@@ -1,6 +1,8 @@
 const API_BASE =
   (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, '') ||
-  'http://127.0.0.1:8000/api/v1/xtrapay';
+  (import.meta.env.PROD
+    ? 'https://xta.check-outnow.com/api/v1/xtrapay'
+    : 'http://127.0.0.1:8000/api/v1/xtrapay');
 
 const TOKEN_KEY = 'xtrapay_token';
 
