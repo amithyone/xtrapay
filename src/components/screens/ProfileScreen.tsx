@@ -18,7 +18,8 @@ type SheetKind =
  * Full profile & settings — typical Nigerian fintech agent/customer account centre.
  */
 export const ProfileScreen: React.FC = () => {
-  const { accountContext, showToast, theme, toggleTheme } = useTransactions();
+  const { accountContext, showToast, theme, toggleTheme, logout, setActiveScreen } =
+    useTransactions();
   const isLight = theme === 'light';
 
   const [fullName, setFullName] = useState('Innocent Solomon');
@@ -46,6 +47,8 @@ export const ProfileScreen: React.FC = () => {
   const [draft, setDraft] = useState('');
   const [passwordPinOpen, setPasswordPinOpen] = useState(false);
   const [pinChangeOpen, setPinChangeOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState('');
 
   const openEdit = (kind: SheetKind, value: string) => {
     setDraft(value);
@@ -295,7 +298,7 @@ export const ProfileScreen: React.FC = () => {
           icon="support_agent"
           label="Contact support"
           value="24/7 concierge"
-          onClick={() => showToast('Support', 'Connecting to Xtrapay Tier-1 concierge…', 'info')}
+          onClick={() => setActiveScreen('support')}
         />
         <Row
           icon="help"
@@ -305,12 +308,12 @@ export const ProfileScreen: React.FC = () => {
         <Row
           icon="file_text"
           label="Terms of use"
-          onClick={() => showToast('Terms', 'Xtrapay terms of use.', 'info')}
+          onClick={() => setActiveScreen('terms')}
         />
         <Row
           icon="shield"
           label="Privacy policy"
-          onClick={() => showToast('Privacy', 'How we protect your data.', 'info')}
+          onClick={() => setActiveScreen('privacy')}
         />
         <Row
           icon="account_balance"
@@ -318,13 +321,32 @@ export const ProfileScreen: React.FC = () => {
           value="CBN · NDIC"
           onClick={() => showToast('Licences', 'Xtrapay is CBN licensed and NDIC insured.', 'info')}
         />
+        <Row
+          icon="sparkles"
+          label="Powered by CheckoutNow"
+          value="Technology partner"
+          onClick={() => setActiveScreen('checkoutnow')}
+        />
+      </Section>
+
+      <Section title="Danger zone">
+        <Row
+          icon="delete"
+          label="Delete account"
+          value="Permanent"
+          onClick={() => {
+            setDeleteConfirm('');
+            setDeleteOpen(true);
+          }}
+        />
       </Section>
 
       <button
         type="button"
-        onClick={() =>
-          showToast('Signed Out', 'You have been securely signed out on this device.', 'info')
-        }
+        onClick={() => {
+          logout();
+          showToast('Signed Out', 'You have been securely signed out on this device.', 'info');
+        }}
         className="w-full h-12 rounded-2xl border border-rose-500/30 bg-rose-500/10 text-rose-500 text-[14px] font-semibold active:scale-[0.98] transition-transform"
       >
         Sign out
@@ -399,6 +421,76 @@ export const ProfileScreen: React.FC = () => {
           showToast('PIN Updated', 'Your new 4-digit transaction PIN is active.', 'success');
         }}
       />
+
+      {deleteOpen && (
+        <div
+          className="app-modal-overlay z-[80] bg-black/70 backdrop-blur-md"
+          role="presentation"
+          onClick={() => setDeleteOpen(false)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Delete account"
+            className="app-modal-panel glass-card glass-strong settings-list !rounded-[24px] overflow-hidden"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--glass-border)]">
+              <div>
+                <p className="text-[10px] font-medium uppercase tracking-[0.22em] text-rose-500">
+                  Danger zone
+                </p>
+                <h2 className="mt-1 text-[16px] font-semibold text-[var(--text)]">Delete account</h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDeleteOpen(false)}
+                className="frosted-pad !h-9 !w-9 !min-h-9 !min-w-9 !rounded-full text-[var(--muted)]"
+                aria-label="Close"
+              >
+                <Icon name="close" size={16} />
+              </button>
+            </div>
+
+            <div className="px-5 py-4 space-y-3">
+              <p className="text-[12px] text-[var(--muted)] leading-relaxed">
+                This permanently closes your Xtrapay wallet, cards, and POS mapping. Outstanding
+                balances must be withdrawn first. Type <span className="font-semibold text-[var(--text)]">DELETE</span>{' '}
+                to confirm.
+              </p>
+              <input
+                className={fieldClass}
+                value={deleteConfirm}
+                onChange={e => setDeleteConfirm(e.target.value)}
+                placeholder="Type DELETE"
+                autoComplete="off"
+                autoFocus
+              />
+              <button
+                type="button"
+                disabled={deleteConfirm.trim().toUpperCase() !== 'DELETE'}
+                onClick={() => {
+                  setDeleteOpen(false);
+                  setDeleteConfirm('');
+                  logout();
+                  showToast(
+                    'Account deleted',
+                    'Your Xtrapay account deletion request was submitted. You have been signed out.',
+                    'warning'
+                  );
+                }}
+                className={`w-full h-12 rounded-2xl text-[14px] font-semibold transition-all ${
+                  deleteConfirm.trim().toUpperCase() === 'DELETE'
+                    ? 'bg-rose-500 text-white active:scale-[0.98]'
+                    : 'bg-rose-500/20 text-rose-500/50 cursor-not-allowed'
+                }`}
+              >
+                Permanently delete account
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 };

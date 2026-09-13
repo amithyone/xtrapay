@@ -1,5 +1,7 @@
 export type ScreenType =
   | 'hub'
+  | 'pay'
+  | 'services'
   | 'saving'
   | 'utility'
   | 'card'
@@ -11,7 +13,17 @@ export type ScreenType =
   | 'save_together'
   | 'terminals'
   | 'xpoints'
-  | 'profile';
+  | 'profile'
+  | 'terms'
+  | 'privacy'
+  | 'checkoutnow'
+  | 'statement'
+  | 'recurring'
+  | 'sub_accounts'
+  | 'loans'
+  | 'limits'
+  | 'support'
+  | 'network';
 
 export type AccountContext = 'personal' | 'business';
 

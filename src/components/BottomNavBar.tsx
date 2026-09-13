@@ -7,6 +7,9 @@ import { Icon } from './Icon';
  * Circle-active bottom nav (reference: crypto-wallet style).
  * Rollback: set USE_LEGACY_BOTTOM_NAV = true in App.tsx
  * Legacy file: BottomNavBar.legacy.tsx
+ *
+ * Tabs: Home · Pay · Services · Save · Cards
+ * History stays on the top app bar.
  */
 export const BottomNavBar: React.FC = () => {
   const { activeScreen, setActiveScreen, theme } = useTransactions();
@@ -20,42 +23,46 @@ export const BottomNavBar: React.FC = () => {
   }[] = [
     {
       id: 'hub',
-      label: 'Hub',
+      label: 'Home',
+      icon: 'home',
+      matchScreens: ['hub', 'receive', 'profile', 'history'],
+    },
+    {
+      id: 'pay',
+      label: 'Pay',
+      icon: 'swap_horiz',
+      matchScreens: ['pay', 'transfer', 'paybills'],
+    },
+    {
+      id: 'services',
+      label: 'Services',
       icon: 'grid_view',
       matchScreens: [
-        'hub',
-        'transfer',
-        'receive',
-        'paybills',
-        'ask_money',
+        'services',
+        'utility',
         'terminals',
         'xpoints',
-        'profile',
+        'ask_money',
+        'statement',
+        'recurring',
+        'sub_accounts',
+        'loans',
+        'limits',
+        'support',
+        'network',
       ],
     },
     {
       id: 'saving',
-      label: 'Saving',
+      label: 'Save',
       icon: 'savings',
       matchScreens: ['saving', 'save_together'],
-    },
-    {
-      id: 'utility',
-      label: 'Utility',
-      icon: 'bolt',
-      matchScreens: ['utility'],
     },
     {
       id: 'card',
       label: 'Cards',
       icon: 'credit_card',
       matchScreens: ['card'],
-    },
-    {
-      id: 'history',
-      label: 'History',
-      icon: 'receipt_long',
-      matchScreens: ['history'],
     },
   ];
 

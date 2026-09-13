@@ -12,14 +12,14 @@ import {
  * Hub fused with PAKEE + crypto-wallet language:
  * - dark: frosted maroon glass hero + white type
  * - light: solid white hero
- * - Receive | QR | Send nested in the hero
+ * - Send | QR | Receive nested in the hero
  * Rollback: USE_LEGACY_HUB = true in App.tsx
  */
 export const HubScreen: React.FC = () => {
   const {
     personalBalance,
     businessBalance,
-    accountContext,
+    selectedWallet,
     balanceHidden,
     setBalanceHidden,
     setActiveScreen,
@@ -136,9 +136,14 @@ export const HubScreen: React.FC = () => {
     });
   }, []);
 
-  const currentBalance = accountContext === 'personal' ? personalBalance : businessBalance;
-  const accountNumber = accountContext === 'personal' ? '0124892019' : '2048991204';
-  const bankName = accountContext === 'personal' ? 'Zenith Bank' : 'Providus Bank';
+  const currentBalance =
+    selectedWallet.kind === 'personal'
+      ? personalBalance
+      : selectedWallet.kind === 'business'
+        ? businessBalance
+        : selectedWallet.balance;
+  const accountNumber = selectedWallet.accountNumber;
+  const bankName = selectedWallet.bankName;
 
   const copyAccount = () => {
     if (navigator.clipboard) {
@@ -149,19 +154,18 @@ export const HubScreen: React.FC = () => {
 
   const moreActions = [
     {
-      label: 'Bills',
-      icon: 'receipt_long',
+      label: 'Pay',
+      icon: 'swap_horiz',
       tint: isLight ? 'text-cyan-600' : 'text-white',
       pad: 'bg-cyan-500/18',
-      onClick: () => setActiveScreen('paybills'),
+      onClick: () => setActiveScreen('pay'),
     },
     {
-      label: 'Chat',
-      icon: 'chat_bubble',
+      label: 'History',
+      icon: 'history',
       tint: isLight ? 'text-purple-600' : 'text-white',
       pad: 'bg-purple-500/18',
-      onClick: () =>
-        showToast('Xtrapay Chat', 'Peer-to-peer encrypted messaging active.', 'info'),
+      onClick: () => setActiveScreen('history'),
     },
     {
       label: 'Nearby',
@@ -191,6 +195,13 @@ export const HubScreen: React.FC = () => {
       pad: 'bg-rose-500/18',
       onClick: () => setIsPosPinOpen(true),
     },
+    {
+      label: 'Services',
+      icon: 'grid_view',
+      tint: isLight ? 'text-emerald-600' : 'text-white',
+      pad: 'bg-emerald-500/18',
+      onClick: () => setActiveScreen('services'),
+    },
   ] as const;
 
   return (
@@ -200,7 +211,7 @@ export const HubScreen: React.FC = () => {
         <div className="min-w-0">
           <p className="text-[12px] text-[var(--muted)] tracking-wide leading-none">Good evening</p>
           <h1 className="mt-2 text-[15px] font-semibold text-[var(--text)] tracking-tight">
-            {accountContext === 'personal' ? 'Personal wallet' : 'Business wallet'}
+            {selectedWallet.name}
           </h1>
         </div>
         <button
@@ -279,19 +290,15 @@ export const HubScreen: React.FC = () => {
           {bankName} · {accountNumber.slice(0, 4)}…{accountNumber.slice(-4)}
         </button>
 
-        {/* Dual pills + floating QR */}
+        {/* Dual pills + floating QR — Send left · Receive right */}
         <div className="mt-5 grid grid-cols-[1fr_auto_1fr] items-center gap-2">
           <button
             type="button"
-            onClick={() => setActiveScreen('receive')}
-            className={`h-12 rounded-full font-semibold text-[13px] flex items-center justify-center gap-1.5 active:scale-[0.98] transition-transform ${
-              isLight
-                ? 'bg-zinc-100 text-[#0a0a0a] border border-black/6'
-                : 'bg-white/12 text-white border border-white/18 backdrop-blur-md'
-            }`}
+            onClick={() => setActiveScreen('transfer')}
+            className="h-12 rounded-full bg-[var(--accent)] text-white font-semibold text-[13px] flex items-center justify-center gap-1.5 active:scale-[0.98] transition-transform shadow-md shadow-[var(--accent)]/30"
           >
-            Receive
-            <Icon name="arrow_downward" size={15} />
+            Send
+            <Icon name="arrow_upward" size={15} />
           </button>
 
           <button
@@ -309,11 +316,15 @@ export const HubScreen: React.FC = () => {
 
           <button
             type="button"
-            onClick={() => setActiveScreen('transfer')}
-            className="h-12 rounded-full bg-[var(--accent)] text-white font-semibold text-[13px] flex items-center justify-center gap-1.5 active:scale-[0.98] transition-transform shadow-md shadow-[var(--accent)]/30"
+            onClick={() => setActiveScreen('receive')}
+            className={`h-12 rounded-full font-semibold text-[13px] flex items-center justify-center gap-1.5 active:scale-[0.98] transition-transform ${
+              isLight
+                ? 'bg-zinc-100 text-[#0a0a0a] border border-black/6'
+                : 'bg-white/12 text-white border border-white/18 backdrop-blur-md'
+            }`}
           >
-            Send
-            <Icon name="arrow_upward" size={15} />
+            Receive
+            <Icon name="arrow_downward" size={15} />
           </button>
         </div>
       </section>

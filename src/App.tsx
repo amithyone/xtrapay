@@ -17,6 +17,18 @@ import { SaveTogetherScreen } from './components/screens/SaveTogetherScreen';
 import { TerminalScreen } from './components/screens/TerminalScreen';
 import { XPointsScreen } from './components/screens/XPointsScreen';
 import { ProfileScreen } from './components/screens/ProfileScreen';
+import { PayScreen } from './components/screens/PayScreen';
+import { ServicesScreen } from './components/screens/ServicesScreen';
+import { StatementScreen } from './components/screens/StatementScreen';
+import { RecurringPaymentsScreen } from './components/screens/RecurringPaymentsScreen';
+import { SubAccountsScreen } from './components/screens/SubAccountsScreen';
+import { TermsScreen, PrivacyScreen } from './components/screens/LegalScreen';
+import { CheckoutNowScreen } from './components/screens/CheckoutNowScreen';
+import { LoansScreen } from './components/screens/LoansScreen';
+import { LimitsScreen } from './components/screens/LimitsScreen';
+import { SupportScreen } from './components/screens/SupportScreen';
+import { NetworkScreen } from './components/screens/NetworkScreen';
+import { AuthFlow } from './components/auth/AuthFlow';
 import { TransferSuccessModal } from './components/modals/TransferSuccessModal';
 import { QrModal } from './components/modals/QrModal';
 import { ShareModal } from './components/modals/ShareModal';
@@ -33,12 +45,34 @@ const USE_LEGACY_BOTTOM_NAV = false;
 const USE_LEGACY_HUB = false;
 
 const AppContent: React.FC = () => {
-  const { activeScreen, toast, theme, dismissToast } = useTransactions();
+  const { activeScreen, toast, theme, dismissToast, isAuthenticated, authReady } =
+    useTransactions();
+
+  if (!authReady) {
+    return (
+      <div
+        className="min-h-screen flex justify-center items-center bg-[var(--bg-0)]"
+        data-theme={theme === 'light' ? 'light' : 'dark'}
+      >
+        <p className="text-[13px] text-[var(--muted)]">Connecting…</p>
+      </div>
+    );
+  }
 
   const renderScreen = () => {
     switch (activeScreen) {
       case 'hub':
         return USE_LEGACY_HUB ? <HubScreenLegacy /> : <HubScreen />;
+      case 'pay':
+        return <PayScreen />;
+      case 'services':
+        return <ServicesScreen />;
+      case 'statement':
+        return <StatementScreen />;
+      case 'recurring':
+        return <RecurringPaymentsScreen />;
+      case 'sub_accounts':
+        return <SubAccountsScreen />;
       case 'saving':
         return <SavingScreen />;
       case 'save_together':
@@ -63,6 +97,20 @@ const AppContent: React.FC = () => {
         return <XPointsScreen />;
       case 'profile':
         return <ProfileScreen />;
+      case 'terms':
+        return <TermsScreen />;
+      case 'privacy':
+        return <PrivacyScreen />;
+      case 'checkoutnow':
+        return <CheckoutNowScreen />;
+      case 'loans':
+        return <LoansScreen />;
+      case 'limits':
+        return <LimitsScreen />;
+      case 'support':
+        return <SupportScreen />;
+      case 'network':
+        return <NetworkScreen />;
       default:
         return USE_LEGACY_HUB ? <HubScreenLegacy /> : <HubScreen />;
     }
@@ -73,36 +121,33 @@ const AppContent: React.FC = () => {
       className="min-h-screen flex justify-center overflow-x-hidden transition-colors bg-[var(--bg-0)]"
       data-theme={theme === 'light' ? 'light' : 'dark'}
     >
-      {/* Mobile-contained layout wrapper */}
       <div className={`w-full max-w-md min-h-screen flex flex-col relative shadow-2xl transition-all ${
         theme === 'light'
           ? 'border-x border-black/5'
           : 'border-x border-white/5'
       }`}>
-        {/* Soft 3D atmosphere — sits under frosted glass cards */}
         <BackgroundDepthPattern />
 
-        {/* Top App Bar Header */}
-        <TopAppBar />
+        {isAuthenticated && <TopAppBar />}
 
-        {/* Active Screen View */}
         <div className="flex-1 flex flex-col relative z-10 min-w-0 overflow-x-hidden">
-          {renderScreen()}
+          {isAuthenticated ? renderScreen() : <AuthFlow />}
         </div>
 
-        {/* Persistent Bottom Navigation — toggle USE_LEGACY_BOTTOM_NAV to rollback */}
-        {USE_LEGACY_BOTTOM_NAV ? <BottomNavBarLegacy /> : <BottomNavBar />}
+        {isAuthenticated && (USE_LEGACY_BOTTOM_NAV ? <BottomNavBarLegacy /> : <BottomNavBar />)}
 
-        {/* Modals & Sheets */}
-        <TransferSuccessModal />
-        <QrModal />
-        <ShareModal />
-        <SimulateModal />
-        <NearbyPayModal />
-        <PayAtShopModal />
-        <ScanToPayModal />
+        {isAuthenticated && (
+          <>
+            <TransferSuccessModal />
+            <QrModal />
+            <ShareModal />
+            <SimulateModal />
+            <NearbyPayModal />
+            <PayAtShopModal />
+            <ScanToPayModal />
+          </>
+        )}
 
-        {/* Live Floating Toast — compact frosted chip + close */}
         {toast && (
           <div
             className="fixed top-3 left-0 right-0 z-[90] flex justify-center px-5 pointer-events-none"

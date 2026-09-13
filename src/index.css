@@ -301,6 +301,44 @@ button[role="switch"]:active,
   animation: pebble-float-4 42s ease-in-out infinite alternate;
 }
 
+/* Auth inputs — frosted fields so they separate from the page background */
+.auth-field {
+  border: 1px solid var(--glass-border) !important;
+  background: var(--glass-fill-strong) !important;
+  backdrop-filter: blur(var(--glass-blur)) saturate(160%) !important;
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(160%) !important;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.06),
+    0 8px 20px rgba(0, 0, 0, 0.10),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12) !important;
+  color: var(--text);
+}
+.auth-field:focus,
+.auth-field:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--glass-border)) !important;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.06),
+    0 10px 24px rgba(0, 0, 0, 0.12),
+    0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.14) !important;
+}
+html.light .auth-field,
+[data-theme='light'] .auth-field {
+  background: rgba(255, 255, 255, 0.78) !important;
+  box-shadow:
+    0 1px 2px rgba(15, 15, 15, 0.04),
+    0 8px 18px rgba(15, 15, 15, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9) !important;
+}
+[data-theme='dark'] .auth-field,
+html:not(.light) .auth-field {
+  background: rgba(40, 12, 18, 0.55) !important;
+  box-shadow:
+    0 2px 4px rgba(0, 0, 0, 0.18),
+    0 10px 24px rgba(0, 0, 0, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08) !important;
+}
+
 /* Frosted glass card — default translucency */
 .glass-card,
 .apple-glass-card,

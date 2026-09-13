@@ -69,6 +69,8 @@ export const TerminalScreen: React.FC = () => {
   const [attachTxId, setAttachTxId] = useState<string | null>(null);
   const [historyFilter, setHistoryFilter] = useState<'All' | TerminalTx['status']>('All');
   const [unlockPinOpen, setUnlockPinOpen] = useState(false);
+  const [sweepPageOpen, setSweepPageOpen] = useState(false);
+  const [sweepTarget, setSweepTarget] = useState<'all' | string>('all');
   const [sweepPinOpen, setSweepPinOpen] = useState(false);
   const [fundPinOpen, setFundPinOpen] = useState(false);
   const [pendingFundAmount, setPendingFundAmount] = useState(0);
@@ -231,21 +233,59 @@ export const TerminalScreen: React.FC = () => {
     showToast('Terminal Unlocked', `${selected.name} is active again.`);
   };
 
-  const handleSweepAll = () => {
+  const terminalsWithFloat = useMemo(
+    () => terminals.filter(t => t.balance > 0),
+    [terminals]
+  );
+
+  const sweepAmount = useMemo(() => {
+    if (sweepTarget === 'all') {
+      return terminalsWithFloat.reduce((s, t) => s + t.balance, 0);
+    }
+    return terminals.find(t => t.id === sweepTarget)?.balance ?? 0;
+  }, [sweepTarget, terminals, terminalsWithFloat]);
+
+  const sweepLabel = useMemo(() => {
+    if (sweepTarget === 'all') {
+      return `${terminalsWithFloat.length} terminal${terminalsWithFloat.length === 1 ? '' : 's'}`;
+    }
+    return terminals.find(t => t.id === sweepTarget)?.name ?? 'Terminal';
+  }, [sweepTarget, terminals, terminalsWithFloat]);
+
+  const openSweepPage = () => {
     if (stats.float <= 0) {
       showToast('Nothing to Sweep', 'All POS terminals already have zero float.', 'info');
+      return;
+    }
+    setSweepTarget('all');
+    setSweepPageOpen(true);
+  };
+
+  const handleSweepContinue = () => {
+    if (sweepAmount <= 0) {
+      showToast('Nothing to Sweep', 'Select a POS with float to withdraw.', 'warning');
       return;
     }
     setSweepPinOpen(true);
   };
 
   const handleSweepSuccess = () => {
-    const swept = terminals.reduce((s, t) => s + t.balance, 0);
-    setTerminals(prev => prev.map(t => ({ ...t, balance: 0 })));
+    const swept = sweepAmount;
+    const target = sweepTarget;
+    setTerminals(prev =>
+      prev.map(t => {
+        if (target === 'all') return { ...t, balance: 0 };
+        if (t.id === target) return { ...t, balance: 0 };
+        return t;
+      })
+    );
     setSweepPinOpen(false);
+    setSweepPageOpen(false);
     showToast(
       'POS Sweep Complete',
-      `${money(swept)} withdrawn from all terminals to your Xtrapay wallet.`
+      target === 'all'
+        ? `${money(swept)} withdrawn from all terminals to your Xtrapay wallet.`
+        : `${money(swept)} withdrawn from ${sweepLabel} to your Xtrapay wallet.`
     );
   };
 
@@ -276,6 +316,167 @@ export const TerminalScreen: React.FC = () => {
       return next.length === 0 ? '0' : next;
     });
   };
+
+  /* ───────── Sweep POS page ───────── */
+  if (sweepPageOpen && !selected) {
+    return (
+      <main className="flex-1 min-w-0 px-5 pt-4 pb-32 space-y-4" id="sweep-pos-screen">
+        <button
+          type="button"
+          onClick={() => {
+            setSweepPinOpen(false);
+            setSweepPageOpen(false);
+          }}
+          className="settings-row inline-flex items-center gap-1.5 text-[12px] font-medium text-[var(--muted)] bg-transparent border-0 p-0 appearance-none cursor-pointer active:opacity-70"
+        >
+          <Icon name="arrow_back" size={16} />
+          All terminals
+        </button>
+
+        <header className="glass-card glass-strong settings-list !rounded-[24px] px-4 py-3.5">
+          <p className="text-[10px] uppercase tracking-[0.24em] text-[var(--muted)]">
+            Withdraw float
+          </p>
+          <h1 className="mt-1.5 text-[18px] font-semibold text-[var(--text)] tracking-tight">
+            Sweep POS
+          </h1>
+          <p className="mt-1 text-[12px] text-[var(--muted)] leading-snug">
+            Choose one terminal or sweep every POS with float into your wallet.
+          </p>
+        </header>
+
+        <section className="glass-card glass-strong settings-list !rounded-[24px] px-4 py-4 space-y-1">
+          <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--muted)]">
+            Amount to withdraw
+          </p>
+          <p className="text-[26px] font-semibold font-mono text-[var(--text)] tracking-tight">
+            {money(sweepAmount)}
+          </p>
+          <p className="text-[12px] text-[var(--muted)]">
+            From {sweepLabel} · settles to Xtrapay wallet
+          </p>
+        </section>
+
+        <section className="space-y-2">
+          <p className="px-1 text-[10px] font-medium uppercase tracking-[0.28em] text-[var(--muted)]">
+            Select POS to sweep
+          </p>
+
+          <button
+            type="button"
+            onClick={() => setSweepTarget('all')}
+            className={`settings-row w-full glass-card glass-strong !rounded-[22px] px-4 py-4 text-left border appearance-none cursor-pointer ${
+              sweepTarget === 'all'
+                ? 'border-[var(--accent)]/55 ring-1 ring-[var(--accent)]/30'
+                : 'border-transparent'
+            }`}
+          >
+            <div className="flex items-center gap-3">
+              <span
+                className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 ${
+                  sweepTarget === 'all'
+                    ? 'border-[var(--accent)] bg-[var(--accent)] text-white'
+                    : 'border-[var(--glass-border)]'
+                }`}
+              >
+                {sweepTarget === 'all' && <Icon name="check" size={12} />}
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="text-[14px] font-semibold text-[var(--text)]">All POS with float</p>
+                <p className="mt-0.5 text-[11px] text-[var(--muted)]">
+                  {terminalsWithFloat.length} terminal
+                  {terminalsWithFloat.length === 1 ? '' : 's'} · combined balance
+                </p>
+              </div>
+              <p className="text-[13px] font-semibold font-mono text-[var(--text)] shrink-0">
+                {money(stats.float)}
+              </p>
+            </div>
+          </button>
+
+          {terminals.map(t => {
+            const selectedTarget = sweepTarget === t.id;
+            const disabled = t.balance <= 0;
+            return (
+              <button
+                key={t.id}
+                type="button"
+                disabled={disabled}
+                onClick={() => !disabled && setSweepTarget(t.id)}
+                className={`settings-row w-full glass-card glass-strong !rounded-[22px] px-4 py-4 text-left border appearance-none ${
+                  disabled
+                    ? 'opacity-45 cursor-not-allowed border-transparent'
+                    : selectedTarget
+                      ? 'border-[var(--accent)]/55 ring-1 ring-[var(--accent)]/30 cursor-pointer'
+                      : 'border-transparent cursor-pointer'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <span
+                    className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 ${
+                      selectedTarget
+                        ? 'border-[var(--accent)] bg-[var(--accent)] text-white'
+                        : 'border-[var(--glass-border)]'
+                    }`}
+                  >
+                    {selectedTarget && <Icon name="check" size={12} />}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-[14px] font-semibold text-[var(--text)] truncate">
+                        {t.name}
+                      </p>
+                      <span
+                        className={`text-[9px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full border ${statusTone(
+                          t.status,
+                          isLight
+                        )}`}
+                      >
+                        {t.status === 'Offline' ? 'Offline' : t.status}
+                      </span>
+                    </div>
+                    <p className="mt-0.5 text-[11px] font-mono text-[var(--muted)]">
+                      {t.terminalId}
+                    </p>
+                  </div>
+                  <p className="text-[13px] font-semibold font-mono text-[var(--text)] shrink-0">
+                    {money(t.balance)}
+                  </p>
+                </div>
+              </button>
+            );
+          })}
+        </section>
+
+        <button
+          type="button"
+          onClick={handleSweepContinue}
+          disabled={sweepAmount <= 0}
+          className={`w-full h-12 rounded-2xl text-[14px] font-semibold flex items-center justify-center gap-2 ${
+            sweepAmount <= 0
+              ? 'opacity-45 cursor-not-allowed bg-black/[0.04] dark:bg-white/[0.06] text-[var(--muted)] border border-[var(--glass-border)]'
+              : 'bg-[var(--accent)] text-white shadow-md shadow-[var(--accent)]/25'
+          }`}
+        >
+          Continue to PIN
+        </button>
+
+        <PinSheetModal
+          isOpen={sweepPinOpen}
+          onClose={() => setSweepPinOpen(false)}
+          title={sweepTarget === 'all' ? 'Sweep All POS Float' : 'Sweep POS Float'}
+          subtitle={`Withdraw ${money(sweepAmount)} from ${sweepLabel} to your wallet`}
+          amount={sweepAmount}
+          recipient={
+            sweepTarget === 'all'
+              ? 'All POS'
+              : terminals.find(t => t.id === sweepTarget)?.terminalId
+          }
+          onSuccess={handleSweepSuccess}
+        />
+      </main>
+    );
+  }
 
   /* ───────── List (Mini Dashboard) ───────── */
   if (!selected) {
@@ -330,16 +531,16 @@ export const TerminalScreen: React.FC = () => {
           </div>
           <button
             type="button"
-            onClick={handleSweepAll}
+            onClick={openSweepPage}
             disabled={stats.float <= 0}
-            className={`w-full h-11 rounded-2xl text-[13px] font-semibold flex items-center justify-center gap-2 active:scale-[0.98] transition-transform ${
+            className={`w-full h-11 rounded-2xl text-[13px] font-semibold flex items-center justify-center gap-2 ${
               stats.float <= 0
                 ? 'opacity-45 cursor-not-allowed bg-black/[0.04] dark:bg-white/[0.06] text-[var(--muted)] border border-[var(--glass-border)]'
                 : 'bg-[var(--accent)] text-white shadow-md shadow-[var(--accent)]/25'
             }`}
           >
             <Icon name="arrow_upward" size={16} />
-            Sweep POS · withdraw all
+            Sweep POS
           </button>
         </section>
 
@@ -399,15 +600,6 @@ export const TerminalScreen: React.FC = () => {
             </button>
           ))}
         </section>
-
-        <PinSheetModal
-          isOpen={sweepPinOpen}
-          onClose={() => setSweepPinOpen(false)}
-          title="Sweep All POS Float"
-          subtitle={`Withdraw ${money(stats.float)} from every terminal to your wallet`}
-          amount={stats.float}
-          onSuccess={handleSweepSuccess}
-        />
       </main>
     );
   }

@@ -14,6 +14,13 @@ import {
   INITIAL_MONEY_REQUESTS,
   INITIAL_GROUP_POTS,
 } from '../data/initialData';
+import {
+  INITIAL_WALLETS,
+  walletParentContext,
+  type WalletAccount,
+} from '../data/wallets';
+import { getAccessToken, setAccessToken } from '../lib/api';
+import { apiBootstrap, apiLogout, mapApiWallets } from '../lib/xtrapayApi';
 
 interface ToastInfo {
   id: string;
@@ -31,6 +38,11 @@ interface TransactionContextType {
   // Account State
   accountContext: AccountContext;
   setAccountContext: (ctx: AccountContext) => void;
+  wallets: WalletAccount[];
+  selectedWalletId: string;
+  selectedWallet: WalletAccount;
+  selectWallet: (id: string) => void;
+  addWallet: (wallet: WalletAccount) => void;
   personalBalance: number;
   businessBalance: number;
   flexibleSavings: number;
@@ -45,6 +57,15 @@ interface TransactionContextType {
   setStrictAutoSave: (enabled: boolean) => void;
   balanceHidden: boolean;
   setBalanceHidden: (hidden: boolean) => void;
+
+  // Auth
+  isAuthenticated: boolean;
+  authReady: boolean;
+  hasSeenIntro: boolean;
+  completeIntro: () => void;
+  login: () => void;
+  establishSession: (accessToken: string) => Promise<void>;
+  logout: () => void;
   
   // Real-time Transactions
   transactions: Transaction[];
@@ -216,18 +237,154 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
   };
 
   // Balances
-  const [accountContext, setAccountContext] = useState<AccountContext>('personal');
+  // Account
+  const [accountContext, setAccountContextState] = useState<AccountContext>('personal');
+  const [wallets, setWallets] = useState<WalletAccount[]>(INITIAL_WALLETS);
+  const [selectedWalletId, setSelectedWalletId] = useState<string>('personal');
   const [personalBalance, setPersonalBalance] = useState<number>(4850240.00);
   const [businessBalance, setBusinessBalance] = useState<number>(14250000.00);
   const [flexibleSavings, setFlexibleSavings] = useState<number>(214558.04);
   const [strictSavings, setStrictSavings] = useState<number>(2250.00);
   const [dailySpent, setDailySpent] = useState<number>(2450000);
-  const dailyLimit = 5000000;
+  const [dailyLimit, setDailyLimit] = useState<number>(5000000);
   
   const [cardFrozen, setCardFrozen] = useState<boolean>(false);
   const [biometricsActive, setBiometricsActive] = useState<boolean>(true);
   const [strictAutoSave, setStrictAutoSave] = useState<boolean>(true);
   const [balanceHidden, setBalanceHidden] = useState<boolean>(false);
+
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
+    try {
+      return Boolean(getAccessToken());
+    } catch {
+      return false;
+    }
+  });
+  const [authReady, setAuthReady] = useState<boolean>(() => !getAccessToken());
+  const [hasSeenIntro, setHasSeenIntro] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('xtrapay_intro') === '1';
+    } catch {
+      return false;
+    }
+  });
+
+  const completeIntro = () => {
+    setHasSeenIntro(true);
+    try {
+      localStorage.setItem('xtrapay_intro', '1');
+    } catch {
+      // ignore
+    }
+  };
+
+  const applyBootstrap = async () => {
+    const data = await apiBootstrap();
+    const mapped = mapApiWallets(data.wallets);
+    setWallets(mapped.length ? mapped : INITIAL_WALLETS);
+    const selected =
+      data.selectedWalletId && mapped.some(w => w.id === data.selectedWalletId)
+        ? data.selectedWalletId
+        : mapped.find(w => w.kind === 'personal')?.id ?? mapped[0]?.id ?? 'personal';
+    setSelectedWalletId(selected);
+    const personal = mapped.find(w => w.kind === 'personal');
+    const business = mapped.find(w => w.kind === 'business');
+    if (personal) setPersonalBalance(personal.balance);
+    if (business) setBusinessBalance(business.balance);
+    setFlexibleSavings(data.savings.flexibleBalance);
+    setStrictSavings(data.savings.strictBalance);
+    setStrictAutoSave(data.savings.strictAutoSave);
+    setDailySpent(data.limits.dailySpent);
+    setDailyLimit(data.limits.dailySpendCap);
+    setOverdraftLimit(data.overdraftLimit);
+    setCardFrozen(data.cardFrozen);
+    if (Array.isArray(data.recentTransactions) && data.recentTransactions.length) {
+      setTransactions(data.recentTransactions);
+    }
+  };
+
+  const establishSession = async (accessToken: string) => {
+    setAccessToken(accessToken);
+    await applyBootstrap();
+    setIsAuthenticated(true);
+    setActiveScreenState('hub');
+    setScreenHistory(['hub']);
+    try {
+      localStorage.setItem('xtrapay_auth', '1');
+    } catch {
+      // ignore
+    }
+  };
+
+  const login = () => {
+    setIsAuthenticated(true);
+    setActiveScreenState('hub');
+    setScreenHistory(['hub']);
+    try {
+      localStorage.setItem('xtrapay_auth', '1');
+    } catch {
+      // ignore
+    }
+  };
+
+  const logout = () => {
+    void apiLogout();
+    setAccessToken(null);
+    setIsAuthenticated(false);
+    setActiveScreenState('hub');
+    setScreenHistory(['hub']);
+    try {
+      localStorage.removeItem('xtrapay_auth');
+    } catch {
+      // ignore
+    }
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    const token = getAccessToken();
+    if (!token) {
+      setAuthReady(true);
+      return;
+    }
+    (async () => {
+      try {
+        await applyBootstrap();
+        if (!cancelled) {
+          setIsAuthenticated(true);
+        }
+      } catch {
+        setAccessToken(null);
+        if (!cancelled) {
+          setIsAuthenticated(false);
+        }
+      } finally {
+        if (!cancelled) setAuthReady(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const selectedWallet =
+    wallets.find(w => w.id === selectedWalletId) ?? wallets[0] ?? INITIAL_WALLETS[0];
+
+  const selectWallet = (id: string) => {
+    const wallet = wallets.find(w => w.id === id);
+    if (!wallet) return;
+    setSelectedWalletId(id);
+    setAccountContextState(walletParentContext(wallet.kind));
+  };
+
+  const setAccountContext = (ctx: AccountContext) => {
+    setAccountContextState(ctx);
+    setSelectedWalletId(ctx);
+  };
+
+  const addWallet = (wallet: WalletAccount) => {
+    setWallets(prev => [wallet, ...prev]);
+  };
 
   // Transactions State
   const [transactions, setTransactions] = useState<Transaction[]>(INITIAL_TRANSACTIONS);
@@ -414,13 +571,20 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
 
   const repeatTransfer = () => {
     if (!activeTransfer) return;
-    initiateTransfer({
-      amount: activeTransfer.amount,
-      recipientName: activeTransfer.recipientName,
-      bankName: activeTransfer.bankName,
+    setPrefilledTransferData({
       accountNumber: activeTransfer.accountNumber,
+      bankName: activeTransfer.bankName,
+      recipientName: activeTransfer.recipientName,
+      amount: activeTransfer.amount,
       narration: activeTransfer.narration,
     });
+    setActiveTransfer(null);
+    setActiveScreen('transfer');
+    showToast(
+      'Ready to edit',
+      'Details refilled on Transfer — review and confirm when you want to send.',
+      'info'
+    );
   };
 
   // Pay bill logic with instant STS token generation
@@ -963,6 +1127,11 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
         navigateBack,
         accountContext,
         setAccountContext,
+        wallets,
+        selectedWalletId,
+        selectedWallet,
+        selectWallet,
+        addWallet,
         personalBalance,
         businessBalance,
         flexibleSavings,
@@ -977,6 +1146,13 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
         setStrictAutoSave,
         balanceHidden,
         setBalanceHidden,
+        isAuthenticated,
+        authReady,
+        hasSeenIntro,
+        completeIntro,
+        login,
+        establishSession,
+        logout,
         transactions,
         activeTransfer,
         initiateTransfer,

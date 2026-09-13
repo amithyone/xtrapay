@@ -64,6 +64,7 @@ import {
   LineChart,
   Clock,
   Hourglass,
+  History,
   Grid3X3,
   GitFork,
   Scale,
@@ -83,6 +84,7 @@ import {
   MonitorSmartphone,
   MapPin,
   Pencil,
+  Trash2,
   LucideProps,
 } from 'lucide-react';
 
@@ -96,6 +98,7 @@ const ICON_MAP: Record<string, React.ComponentType<LucideProps>> = {
   add_card: CreditCard,
   receipt_long: Receipt,
   receipt: Receipt,
+  history: History,
   point_of_sale: MonitorSmartphone,
   pos: MonitorSmartphone,
 
@@ -188,6 +191,9 @@ const ICON_MAP: Record<string, React.ComponentType<LucideProps>> = {
   place: MapPin,
   edit: Pencil,
   edit_note: Pencil,
+  delete: Trash2,
+  delete_forever: Trash2,
+  trash: Trash2,
 
   // Biller & Category Icons
   tv: Tv,
