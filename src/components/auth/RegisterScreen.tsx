@@ -18,7 +18,9 @@ interface RegisterScreenProps {
  * Registration step 1 — basic account details.
  */
 export const RegisterScreen: React.FC<RegisterScreenProps> = ({ onBack, onContinue }) => {
-  const [fullName, setFullName] = useState('');
+  const [firstName, setFirstName] = useState('');
+  const [middleName, setMiddleName] = useState('');
+  const [lastName, setLastName] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -27,8 +29,11 @@ export const RegisterScreen: React.FC<RegisterScreenProps> = ({ onBack, onContin
   const [error, setError] = useState('');
 
   const submit = () => {
-    if (!fullName.trim() || !phone.trim() || !email.trim() || password.length < 6) {
-      setError('Fill all fields. Password must be at least 6 characters.');
+    const first = firstName.trim();
+    const middle = middleName.trim();
+    const last = lastName.trim();
+    if (!first || !last || !phone.trim() || !email.trim() || password.length < 6) {
+      setError('Enter first and last name, phone, email, and a password (min 6 characters).');
       return;
     }
     if (!accepted) {
@@ -36,8 +41,10 @@ export const RegisterScreen: React.FC<RegisterScreenProps> = ({ onBack, onContin
       return;
     }
     setError('');
+    // Backend still expects a single fullName — join parts (middle optional).
+    const fullName = [first, middle, last].filter(Boolean).join(' ');
     onContinue({
-      fullName: fullName.trim(),
+      fullName,
       phone: phone.trim(),
       email: email.trim(),
       password,
@@ -52,10 +59,24 @@ export const RegisterScreen: React.FC<RegisterScreenProps> = ({ onBack, onContin
     >
       <input
         className={authFieldClass}
-        value={fullName}
-        onChange={e => setFullName(e.target.value)}
-        placeholder="Full name (as on ID)"
-        autoComplete="name"
+        value={firstName}
+        onChange={e => setFirstName(e.target.value)}
+        placeholder="First name"
+        autoComplete="given-name"
+      />
+      <input
+        className={authFieldClass}
+        value={middleName}
+        onChange={e => setMiddleName(e.target.value)}
+        placeholder="Middle name (optional)"
+        autoComplete="additional-name"
+      />
+      <input
+        className={authFieldClass}
+        value={lastName}
+        onChange={e => setLastName(e.target.value)}
+        placeholder="Last name"
+        autoComplete="family-name"
       />
       <input
         className={authFieldClass}
