@@ -2,6 +2,11 @@ import React, { useState } from 'react';
 import { useTransactions } from '../../context/TransactionContext';
 import { Transaction } from '../../types';
 import { Icon } from '../Icon';
+import {
+  downloadTransferReceiptImage,
+  downloadTransferReceiptPdf,
+  shareTransferReceiptImage,
+} from '../../lib/transferReceipt';
 
 function todayTxIconName(tx: Transaction): string {
   if (tx.category === 'bill') return 'bolt';
@@ -30,10 +35,11 @@ function yesterdayTxIconTint(tx: Transaction): string {
 }
 
 export const HistoryScreen: React.FC = () => {
-  const { transactions, showToast } = useTransactions();
+  const { transactions, showToast, theme } = useTransactions();
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [activeFilter, setActiveFilter] = useState<string>('All');
   const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
+  const [receiptBusy, setReceiptBusy] = useState<'image' | 'pdf' | 'share' | null>(null);
 
   const filteredTxs = transactions.filter(tx => {
     const matchesSearch =
@@ -397,22 +403,88 @@ export const HistoryScreen: React.FC = () => {
               )}
             </div>
 
-            <div className="grid grid-cols-2 gap-2.5 pt-1">
+            <div className="space-y-2.5 pt-1">
+              <div className="grid grid-cols-2 gap-2.5">
+                <button
+                  type="button"
+                  disabled={receiptBusy !== null}
+                  onClick={async () => {
+                    if (!selectedTx || receiptBusy) return;
+                    setReceiptBusy('pdf');
+                    try {
+                      await downloadTransferReceiptPdf(
+                        selectedTx,
+                        theme === 'light' ? 'light' : 'dark'
+                      );
+                      showToast('PDF receipt', 'Styled PDF downloaded.', 'success');
+                    } catch {
+                      showToast('Download failed', 'Could not save PDF receipt.', 'warning');
+                    } finally {
+                      setReceiptBusy(null);
+                    }
+                  }}
+                  className="h-11 rounded-2xl glass-chip !rounded-2xl text-[var(--text)] text-xs font-semibold flex items-center justify-center gap-1.5 disabled:opacity-60"
+                >
+                  <Icon name="download" size={16} />
+                  {receiptBusy === 'pdf' ? 'Saving…' : 'Save PDF'}
+                </button>
+                <button
+                  type="button"
+                  disabled={receiptBusy !== null}
+                  onClick={async () => {
+                    if (!selectedTx || receiptBusy) return;
+                    setReceiptBusy('image');
+                    try {
+                      await downloadTransferReceiptImage(
+                        selectedTx,
+                        theme === 'light' ? 'light' : 'dark'
+                      );
+                      showToast('Image receipt', 'Styled PNG downloaded.', 'success');
+                    } catch {
+                      showToast('Download failed', 'Could not save image receipt.', 'warning');
+                    } finally {
+                      setReceiptBusy(null);
+                    }
+                  }}
+                  className="h-11 rounded-2xl glass-chip !rounded-2xl text-[var(--text)] text-xs font-semibold flex items-center justify-center gap-1.5 disabled:opacity-60"
+                >
+                  <Icon name="image" size={16} />
+                  {receiptBusy === 'image' ? 'Saving…' : 'Save image'}
+                </button>
+              </div>
               <button
                 type="button"
-                onClick={() => {
-                  showToast('Receipt Shared', 'PDF copy generated.');
-                  setSelectedTx(null);
+                disabled={receiptBusy !== null}
+                onClick={async () => {
+                  if (!selectedTx || receiptBusy) return;
+                  setReceiptBusy('share');
+                  try {
+                    const result = await shareTransferReceiptImage(
+                      selectedTx,
+                      theme === 'light' ? 'light' : 'dark'
+                    );
+                    showToast(
+                      result === 'shared' ? 'Receipt shared' : 'Receipt image saved',
+                      result === 'shared'
+                        ? 'Styled receipt shared.'
+                        : 'PNG downloaded with success-screen style.',
+                      'success'
+                    );
+                  } catch {
+                    showToast('Share failed', 'Could not share receipt image.', 'warning');
+                  } finally {
+                    setReceiptBusy(null);
+                  }
                 }}
-                className="h-11 rounded-2xl glass-chip !rounded-2xl text-[var(--text)] text-xs font-semibold flex items-center justify-center gap-1.5"
+                className="w-full h-11 rounded-2xl glass-card glass-strong !rounded-2xl text-[var(--text)] text-xs font-semibold flex items-center justify-center gap-1.5 disabled:opacity-60"
               >
-                <Icon name="share" size={16} />
-                Share receipt
+                <Icon name="share" size={16} className="text-[var(--accent)]" />
+                {receiptBusy === 'share' ? 'Preparing…' : 'Share receipt image'}
               </button>
               <button
                 type="button"
                 onClick={() => setSelectedTx(null)}
-                className="h-11 rounded-2xl bg-[var(--accent)] text-white text-xs font-semibold shadow-lg shadow-[var(--accent)]/25"
+                className="w-full h-11 rounded-2xl bg-[var(--accent)] text-white text-xs font-semibold shadow-lg shadow-[var(--accent)]/25"
               >
                 Done
               </button>

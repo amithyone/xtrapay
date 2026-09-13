@@ -91,30 +91,60 @@ export const AuthFlow: React.FC = () => {
   }
 
   if (step === 'register_kyc') {
+    const sendRegisterOtps = async () => {
+      const phone = basicDraft?.phone?.trim();
+      const email = basicDraft?.email?.trim();
+      if (!phone || !email || !registrationId) {
+        setStep('register');
+        showToast(
+          'Missing details',
+          'Phone and email are required so we can send verification codes.',
+          'warning'
+        );
+        return false;
+      }
+      // Send the same purpose OTP to both channels; user verifies with phone OTP screen.
+      const [phoneOtp] = await Promise.all([
+        apiSendOtp(phone, 'register'),
+        apiSendOtp(email, 'register'),
+      ]);
+      openOtp(phone, 'register');
+      showToast(
+        'OTP Sent',
+        phoneOtp.demoCode
+          ? `Codes sent to phone & email. Demo code: ${phoneOtp.demoCode}`
+          : `Verification codes sent to ${phone} and ${email}.`,
+        'info'
+      );
+      return true;
+    };
+
     return (
       <KycRegisterScreen
         onBack={() => setStep('register')}
-        onContinue={async payload => {
+        onSkip={async () => {
           if (busy) return;
-          const phone = basicDraft?.phone?.trim();
-          if (!phone || !registrationId) {
-            setStep('register');
-            showToast('Missing details', 'Start registration again from the beginning.', 'warning');
-            return;
-          }
           setBusy(true);
           try {
+            await sendRegisterOtps();
+          } catch (err) {
+            showToast('OTP failed', errMessage(err, 'Could not send verification code.'), 'warning');
+          } finally {
+            setBusy(false);
+          }
+        }}
+        onContinue={async payload => {
+          if (busy) return;
+          setBusy(true);
+          try {
+            if (!registrationId) {
+              setStep('register');
+              showToast('Missing details', 'Start registration again from the beginning.', 'warning');
+              return;
+            }
             setKycDraft(payload);
             await apiSubmitKyc({ registrationId, ...payload });
-            const otp = await apiSendOtp(phone, 'register');
-            openOtp(phone, 'register');
-            showToast(
-              'OTP Sent',
-              otp.demoCode
-                ? `Demo code: ${otp.demoCode}`
-                : `Verification code sent to ${phone}.`,
-              'info'
-            );
+            await sendRegisterOtps();
           } catch (err) {
             showToast('KYC failed', errMessage(err, 'Could not submit KYC.'), 'warning');
           } finally {

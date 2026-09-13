@@ -1,6 +1,11 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useTransactions } from '../../context/TransactionContext';
 import { Icon } from '../Icon';
+import {
+  downloadTransferReceiptImage,
+  downloadTransferReceiptPdf,
+  shareTransferReceiptImage,
+} from '../../lib/transferReceipt';
 
 export const TransferSuccessModal: React.FC = () => {
   const {
@@ -8,9 +13,13 @@ export const TransferSuccessModal: React.FC = () => {
     dismissActiveTransfer,
     repeatTransfer,
     showToast,
+    theme,
   } = useTransactions();
+  const [busy, setBusy] = useState<'image' | 'pdf' | 'share' | null>(null);
 
   if (!activeTransfer) return null;
+
+  const receiptTheme = theme === 'light' ? 'light' : 'dark';
 
   const copyRef = () => {
     if (navigator.clipboard) {
@@ -19,15 +28,48 @@ export const TransferSuccessModal: React.FC = () => {
     showToast('Reference Copied', `${activeTransfer.reference} copied.`);
   };
 
-  const handleShareReceipt = () => {
-    const text = `Xtrapay Transfer Receipt\nAmount: ₦${activeTransfer.amount.toLocaleString()}\nRecipient: ${activeTransfer.recipientName}\nBank: ${activeTransfer.bankName}\nRef: ${activeTransfer.reference}\nStatus: Settled`;
-    if (navigator.share) {
-      navigator.share({ title: 'Xtrapay Receipt', text }).catch(() => {});
-    } else {
-      if (navigator.clipboard) {
-        navigator.clipboard.writeText(text);
-      }
-      showToast('Receipt Copied', 'Full receipt payload copied to clipboard.');
+  const handleShareImage = async () => {
+    if (busy) return;
+    setBusy('share');
+    try {
+      const result = await shareTransferReceiptImage(activeTransfer, receiptTheme);
+      showToast(
+        result === 'shared' ? 'Receipt shared' : 'Receipt image saved',
+        result === 'shared'
+          ? 'Styled transfer receipt shared.'
+          : 'PNG receipt downloaded — styled like this success screen.',
+        'success'
+      );
+    } catch {
+      showToast('Share failed', 'Could not create the receipt image.', 'warning');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleDownloadImage = async () => {
+    if (busy) return;
+    setBusy('image');
+    try {
+      await downloadTransferReceiptImage(activeTransfer, receiptTheme);
+      showToast('Image receipt', 'PNG downloaded with the success-screen style.', 'success');
+    } catch {
+      showToast('Download failed', 'Could not save the receipt image.', 'warning');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleDownloadPdf = async () => {
+    if (busy) return;
+    setBusy('pdf');
+    try {
+      await downloadTransferReceiptPdf(activeTransfer, receiptTheme);
+      showToast('PDF receipt', 'PDF downloaded with the success-screen style.', 'success');
+    } catch {
+      showToast('Download failed', 'Could not save the receipt PDF.', 'warning');
+    } finally {
+      setBusy(null);
     }
   };
 
@@ -240,33 +282,49 @@ export const TransferSuccessModal: React.FC = () => {
               Done
             </button>
 
+            {isStep3Done && (
+              <>
+                <button
+                  onClick={() => void handleShareImage()}
+                  disabled={busy !== null}
+                  className="w-full h-11 rounded-2xl glass-card glass-strong !rounded-2xl text-[var(--text)] text-xs font-medium flex items-center justify-center gap-2 active:scale-[0.98] transition-transform disabled:opacity-60"
+                  type="button"
+                >
+                  <Icon name="share" size={16} className="text-[var(--accent)]" />
+                  {busy === 'share' ? 'Preparing…' : 'Share receipt image'}
+                </button>
+
+                <div className="grid grid-cols-2 gap-2.5">
+                  <button
+                    onClick={() => void handleDownloadPdf()}
+                    disabled={busy !== null}
+                    className="h-11 rounded-2xl glass-chip !rounded-2xl text-[var(--muted)] text-xs font-medium flex items-center justify-center gap-1.5 active:scale-[0.98] disabled:opacity-60"
+                    type="button"
+                  >
+                    <Icon name="download" size={16} />
+                    {busy === 'pdf' ? 'Saving…' : 'Save PDF'}
+                  </button>
+                  <button
+                    onClick={() => void handleDownloadImage()}
+                    disabled={busy !== null}
+                    className="h-11 rounded-2xl glass-chip !rounded-2xl text-[var(--muted)] text-xs font-medium flex items-center justify-center gap-1.5 active:scale-[0.98] disabled:opacity-60"
+                    type="button"
+                  >
+                    <Icon name="image" size={16} />
+                    {busy === 'image' ? 'Saving…' : 'Save image'}
+                  </button>
+                </div>
+              </>
+            )}
+
             <button
-              onClick={handleShareReceipt}
-              className="w-full h-11 rounded-2xl glass-card glass-strong !rounded-2xl text-[var(--text)] text-xs font-medium flex items-center justify-center gap-2 active:scale-[0.98] transition-transform"
+              onClick={repeatTransfer}
+              className="w-full h-11 rounded-2xl glass-chip !rounded-2xl text-[var(--muted)] text-xs font-medium flex items-center justify-center gap-1.5 active:scale-[0.98]"
               type="button"
             >
-              <Icon name="share" size={16} className="text-[var(--accent)]" />
-              Share receipt
+              <Icon name="replay" size={16} />
+              Resend
             </button>
-
-            <div className="grid grid-cols-2 gap-2.5">
-              <button
-                onClick={handleShareReceipt}
-                className="h-11 rounded-2xl glass-chip !rounded-2xl text-[var(--muted)] text-xs font-medium flex items-center justify-center gap-1.5 active:scale-[0.98]"
-                type="button"
-              >
-                <Icon name="download" size={16} />
-                Share PDF
-              </button>
-              <button
-                onClick={repeatTransfer}
-                className="h-11 rounded-2xl glass-chip !rounded-2xl text-[var(--muted)] text-xs font-medium flex items-center justify-center gap-1.5 active:scale-[0.98]"
-                type="button"
-              >
-                <Icon name="replay" size={16} />
-                Resend
-              </button>
-            </div>
           </section>
 
           <footer className="pt-1 text-center">

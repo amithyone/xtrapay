@@ -17,6 +17,7 @@ export type RegisterKycPayload = {
 interface KycRegisterScreenProps {
   onBack: () => void;
   onContinue: (payload: RegisterKycPayload) => void;
+  onSkip?: () => void;
 }
 
 const STATES = [
@@ -62,7 +63,11 @@ const STATES = [
 /**
  * Registration step 2 — identity / KYC (BVN or NIN + personal details).
  */
-export const KycRegisterScreen: React.FC<KycRegisterScreenProps> = ({ onBack, onContinue }) => {
+export const KycRegisterScreen: React.FC<KycRegisterScreenProps> = ({
+  onBack,
+  onContinue,
+  onSkip,
+}) => {
   const [idType, setIdType] = useState<IdType>('bvn');
   const [idNumber, setIdNumber] = useState('');
   const [dateOfBirth, setDateOfBirth] = useState('');
@@ -226,6 +231,19 @@ export const KycRegisterScreen: React.FC<KycRegisterScreenProps> = ({ onBack, on
         <button type="button" onClick={submit} className="glass-cta w-full !rounded-2xl">
           Continue to phone OTP
         </button>
+        {onSkip && (
+          <button
+            type="button"
+            onClick={onSkip}
+            className="w-full h-12 rounded-2xl bg-emerald-600 text-white text-[14px] font-semibold flex items-center justify-center shadow-lg shadow-emerald-600/25 active:scale-[0.98] transition-transform"
+          >
+            Skip for now — verify with OTP
+          </button>
+        )}
+        <p className="text-[11px] text-center text-[var(--muted)] leading-snug px-1">
+          BVN, NIN, and address can be completed later. We send verification codes to both your
+          phone and email.
+        </p>
       </AuthShell>
 
       {stateModalOpen && (
