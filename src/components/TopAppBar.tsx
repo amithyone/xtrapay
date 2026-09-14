@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useTransactions } from '../context/TransactionContext';
 import { Icon } from './Icon';
 import { BotanicalXIcon } from './BackgroundDepthPattern';
@@ -22,13 +22,22 @@ function walletIcon(kind: WalletAccount['kind']) {
   return 'person';
 }
 
+function initialsFromName(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return '?';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
 export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
   const {
     activeScreen,
     setActiveScreen,
     navigateBack,
-    setIsSimulateOpen,
     showToast,
+    accountFullName,
+    userProfile,
+    appBranding,
     theme,
     toggleTheme,
     wallets,
@@ -41,6 +50,17 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
   const isLight = theme === 'light';
   const iconTone = isLight ? 'text-[var(--muted)]' : 'text-white';
   const [accountModalOpen, setAccountModalOpen] = useState(false);
+  const profileInitials = useMemo(
+    () => initialsFromName(userProfile?.fullName || accountFullName || ''),
+    [userProfile?.fullName, accountFullName]
+  );
+
+  const headerLogoUrl = useMemo(() => {
+    if (isLight) {
+      return appBranding.logoUrlLight || appBranding.logoUrl || appBranding.logoUrlDark;
+    }
+    return appBranding.logoUrlDark || appBranding.logoUrl || appBranding.logoUrlLight;
+  }, [appBranding, isLight]);
 
   const displayBalance = (w: WalletAccount) => {
     if (w.kind === 'personal') return personalBalance;
@@ -134,15 +154,6 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
               <span className="text-xs text-[var(--muted)] mr-1 font-medium">Utility</span>
             )}
             <button
-              aria-label="Simulate Inward Transfer"
-              onClick={() => setIsSimulateOpen(true)}
-              className={`frosted-pad !h-8 !w-8 !min-h-8 !min-w-8 !rounded-lg ${isLight ? 'text-[#4cd7f6]' : 'text-white'}`}
-              title="Simulate Real-time Incoming Transfer"
-              type="button"
-            >
-              <Icon name="bolt" size={18} />
-            </button>
-            <button
               aria-label={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
               id="subscreen-theme-toggle-btn"
               onClick={toggleTheme}
@@ -173,13 +184,22 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
       <header className="sticky top-0 z-40 transition-all" id="top-app-bar-main">
         <div className="flex justify-between items-center w-full px-4 h-14 max-w-md mx-auto">
           <div className="flex items-center space-x-2.5 min-w-0">
-            <div className="frosted-pad !h-8 !w-8 !min-h-8 !min-w-8 !rounded-lg p-1 shrink-0">
-              <BotanicalXIcon
-                className="w-5 h-5"
-                strokeColor={isLight ? '#dc2626' : '#ffffff'}
-                opacity={1}
-                strokeWidth={3}
-              />
+            <div className="frosted-pad !h-8 !w-8 !min-h-8 !min-w-8 !rounded-lg p-1 shrink-0 overflow-hidden flex items-center justify-center">
+              {headerLogoUrl ? (
+                <img
+                  src={headerLogoUrl}
+                  alt=""
+                  className="w-full h-full object-contain"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <BotanicalXIcon
+                  className="w-5 h-5"
+                  strokeColor={isLight ? '#dc2626' : '#ffffff'}
+                  opacity={1}
+                  strokeWidth={3}
+                />
+              )}
             </div>
             <button
               type="button"
@@ -190,7 +210,7 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
             >
               <span className="flex items-center gap-1">
                 <span className="text-[17px] font-semibold tracking-tight text-[var(--text)] truncate">
-                  Xtrapay
+                  {appBranding.appName}
                 </span>
                 <Icon name="expand_more" size={16} className={`${iconTone} shrink-0`} />
               </span>
@@ -201,19 +221,6 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
           </div>
 
           <div className="flex items-center space-x-1.5 shrink-0">
-            <button
-              aria-label="Real-time Simulator"
-              onClick={() => setIsSimulateOpen(true)}
-              className={`glass-chip !rounded-lg !px-2 !py-1 flex items-center gap-1.5 text-[11px] font-medium cursor-pointer ${
-                isLight ? 'text-[#4cd7f6]' : 'text-white'
-              }`}
-              title="Simulate Inward Transfer"
-              type="button"
-            >
-              <Icon name="bolt" size={13} />
-              <span>Simulate</span>
-            </button>
-
             <button
               aria-label={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
               id="main-theme-toggle-btn"
@@ -250,7 +257,7 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
               className="frosted-pad !h-7 !w-7 !min-h-7 !min-w-7 !rounded-full text-[var(--accent)] text-xs font-semibold cursor-pointer"
               type="button"
             >
-              JD
+              {profileInitials}
             </button>
           </div>
         </div>

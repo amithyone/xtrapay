@@ -3,14 +3,15 @@ import { useTransactions } from '../../context/TransactionContext';
 import { Icon } from '../Icon';
 
 export const QrModal: React.FC = () => {
-  const { isQrOpen, setIsQrOpen, accountContext, showToast } = useTransactions();
+  const { isQrOpen, setIsQrOpen, selectedWallet, accountFullName, showToast } = useTransactions();
 
   if (!isQrOpen) return null;
 
-  const acct =
-    accountContext === 'personal'
-      ? { name: 'Innocent Solomon', number: '1000003925', bank: 'RUBIES MFB' }
-      : { name: 'Xtrapay Global Ventures', number: '2048991204', bank: 'PROVIDUS BANK' };
+  const acct = {
+    name: selectedWallet.accountName || accountFullName || selectedWallet.name,
+    number: selectedWallet.accountNumber,
+    bank: selectedWallet.bankName,
+  };
 
   return (
     <div className="app-modal-overlay z-[70] bg-black/70 backdrop-blur-md">

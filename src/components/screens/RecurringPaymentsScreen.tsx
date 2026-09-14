@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTransactions } from '../../context/TransactionContext';
-import { INITIAL_BENEFICIARIES } from '../../data/initialData';
 import { ApiError } from '../../lib/api';
+import type { Beneficiary } from '../../types';
 import {
   apiCreateRecurring,
   apiDeleteRecurring,
@@ -64,7 +64,8 @@ function nextCustomRunLabel(
  * Recurring payments — list first, create via bank-transfer flow, delete + run history.
  */
 export const RecurringPaymentsScreen: React.FC = () => {
-  const { personalBalance, showToast, banks, banksLoading } = useTransactions();
+  const { personalBalance, showToast, banks, banksLoading, beneficiaries } = useTransactions();
+  const [benPickerOpen, setBenPickerOpen] = useState(false);
   const [view, setView] = useState<ViewMode>('list');
   const nameEnquirySeq = useRef(0);
   const [nameLoading, setNameLoading] = useState(false);
@@ -207,11 +208,12 @@ export const RecurringPaymentsScreen: React.FC = () => {
     setView('create');
   };
 
-  const handleSelectBeneficiary = (ben: (typeof INITIAL_BENEFICIARIES)[0]) => {
+  const handleSelectBeneficiary = (ben: Beneficiary) => {
     setAccountNumber(ben.accountNumber);
     setSelectedBank(ben.bank);
     setRecipientName('');
-    showToast('Beneficiary Selected', `${ben.name} (${ben.bank}) — verifying name…`);
+    setBenPickerOpen(false);
+    showToast('Beneficiary selected', `${ben.name} (${ben.bank}) — verifying name…`);
   };
 
   const handleProceed = () => {
@@ -603,7 +605,17 @@ export const RecurringPaymentsScreen: React.FC = () => {
             <button
               type="button"
               aria-label="Beneficiaries"
-              onClick={() => handleSelectBeneficiary(INITIAL_BENEFICIARIES[0])}
+              onClick={() => {
+                if (!beneficiaries.length) {
+                  showToast(
+                    'No saved beneficiaries',
+                    'Save a recipient from Transfer first.',
+                    'info'
+                  );
+                  return;
+                }
+                setBenPickerOpen(true);
+              }}
               className="frosted-pad !h-12 !w-12 !min-h-12 !min-w-12 !rounded-2xl text-[var(--accent)] shrink-0"
             >
               <Icon name="contacts" size={18} />
@@ -841,6 +853,49 @@ export const RecurringPaymentsScreen: React.FC = () => {
         Schedule recurring transfer
         <Icon name="arrow_forward" size={18} />
       </button>
+
+      {benPickerOpen && (
+        <div
+          className="app-modal-overlay z-[90] bg-black/70 backdrop-blur-md"
+          role="presentation"
+          onClick={() => setBenPickerOpen(false)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Choose beneficiary"
+            className="app-modal-panel glass-card glass-strong settings-list !rounded-[24px] overflow-hidden max-h-[min(60vh,28rem)]"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--glass-border)]">
+              <h2 className="text-[16px] font-semibold text-[var(--text)]">Saved beneficiaries</h2>
+              <button
+                type="button"
+                onClick={() => setBenPickerOpen(false)}
+                className="frosted-pad !h-9 !w-9 !min-h-9 !min-w-9 !rounded-full text-[var(--muted)]"
+                aria-label="Close"
+              >
+                <Icon name="close" size={16} />
+              </button>
+            </div>
+            <div className="overflow-y-auto divide-y divide-[var(--glass-border)]">
+              {beneficiaries.map(ben => (
+                <button
+                  key={ben.id}
+                  type="button"
+                  onClick={() => handleSelectBeneficiary(ben)}
+                  className="settings-row w-full flex items-center gap-3 px-5 py-3.5 text-left appearance-none border-0 bg-transparent cursor-pointer"
+                >
+                  <span className="text-[13px] font-semibold text-[var(--text)]">{ben.name}</span>
+                  <span className="ml-auto text-[11px] text-[var(--muted)] font-mono truncate">
+                    {ben.bank} · {ben.accountNumber}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       <PinSheetModal
         isOpen={pinOpen}

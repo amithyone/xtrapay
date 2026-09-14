@@ -1,16 +1,14 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useTransactions } from '../../context/TransactionContext';
+import { ApiError } from '../../lib/api';
+import {
+  apiCreateSupportTicket,
+  apiSupportTickets,
+  type AppSupportTicket,
+} from '../../lib/xtrapayApi';
 import { Icon } from '../Icon';
 
 type SupportView = 'hub' | 'ticket';
-
-type Ticket = {
-  id: string;
-  subject: string;
-  category: string;
-  status: 'Open' | 'Pending' | 'Resolved';
-  updated: string;
-};
 
 const CATEGORIES = [
   'Payments & transfers',
@@ -28,51 +26,59 @@ const CATEGORIES = [
 export const SupportScreen: React.FC = () => {
   const { showToast, setActiveScreen } = useTransactions();
   const [view, setView] = useState<SupportView>('hub');
-  const [tickets, setTickets] = useState<Ticket[]>([
-    {
-      id: 'tkt-1',
-      subject: 'POS sweep delay',
-      category: 'POS / terminals',
-      status: 'Pending',
-      updated: '11 Sep',
-    },
-    {
-      id: 'tkt-2',
-      subject: 'BVN mismatch on KYC',
-      category: 'Account & KYC',
-      status: 'Resolved',
-      updated: '02 Sep',
-    },
-  ]);
+  const [tickets, setTickets] = useState<AppSupportTicket[]>([]);
+  const [loadingTickets, setLoadingTickets] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
 
   const [category, setCategory] = useState(CATEGORIES[0]);
   const [subject, setSubject] = useState('');
   const [message, setMessage] = useState('');
   const [categoryModal, setCategoryModal] = useState(false);
 
+  const loadTickets = useCallback(async () => {
+    try {
+      const list = await apiSupportTickets();
+      setTickets(list);
+    } catch {
+      setTickets([]);
+    } finally {
+      setLoadingTickets(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadTickets();
+  }, [loadTickets]);
+
   const fieldClass =
     'auth-field w-full h-12 px-4 rounded-2xl text-[var(--text)] text-sm focus:outline-none transition-all placeholder:text-[var(--muted)]';
 
-  const submitTicket = () => {
+  const submitTicket = async () => {
     if (!subject.trim() || message.trim().length < 10) {
       showToast('Incomplete', 'Add a subject and a short description (10+ characters).', 'warning');
       return;
     }
-    const id = `TKT-${Math.floor(100000 + Math.random() * 900000)}`;
-    setTickets(prev => [
-      {
-        id,
-        subject: subject.trim(),
+    setSubmitting(true);
+    try {
+      const created = await apiCreateSupportTicket({
         category,
-        status: 'Open',
-        updated: 'Just now',
-      },
-      ...prev,
-    ]);
-    showToast('Ticket opened', `${id} · we’ll reply within 15 minutes.`, 'success');
-    setSubject('');
-    setMessage('');
-    setView('hub');
+        subject: subject.trim(),
+        message: message.trim(),
+      });
+      setTickets(prev => [created, ...prev]);
+      showToast('Ticket opened', `${created.id} · we’ll reply within 15 minutes.`, 'success');
+      setSubject('');
+      setMessage('');
+      setView('hub');
+    } catch (err) {
+      showToast(
+        'Could not submit',
+        err instanceof ApiError ? err.message : 'Support API unavailable.',
+        'warning'
+      );
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   if (view === 'ticket') {
@@ -115,8 +121,13 @@ export const SupportScreen: React.FC = () => {
           onChange={e => setMessage(e.target.value)}
           placeholder="Describe the issue — include reference if you have one"
         />
-        <button type="button" onClick={submitTicket} className="glass-cta w-full !rounded-2xl">
-          Submit ticket
+        <button
+          type="button"
+          onClick={() => void submitTicket()}
+          disabled={submitting}
+          className="glass-cta w-full !rounded-2xl disabled:opacity-60"
+        >
+          {submitting ? 'Submitting…' : 'Submit ticket'}
         </button>
 
         {categoryModal && (
@@ -259,6 +270,13 @@ export const SupportScreen: React.FC = () => {
           Your tickets
         </p>
         <div className="glass-card glass-strong settings-list !rounded-[24px] overflow-hidden divide-y divide-[var(--glass-border)]">
+          {loadingTickets ? (
+            <p className="px-4 py-8 text-center text-[12px] text-[var(--muted)]">Loading tickets…</p>
+          ) : tickets.length === 0 ? (
+            <p className="px-4 py-8 text-center text-[12px] text-[var(--muted)]">
+              No tickets yet — open one above.
+            </p>
+          ) : null}
           {tickets.map(t => (
             <button
               key={t.id}

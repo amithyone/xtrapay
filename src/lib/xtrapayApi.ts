@@ -184,8 +184,47 @@ export async function apiDeleteAccount(payload: { confirm: string; pin?: string 
   });
 }
 
+export type ApiAppBranding = {
+  logoUrl?: string | null;
+  logo_url?: string | null;
+  logoUrlDark?: string | null;
+  logo_url_dark?: string | null;
+  logoUrlLight?: string | null;
+  logo_url_light?: string | null;
+  appName?: string | null;
+  app_name?: string | null;
+};
+
+export type AppBranding = {
+  logoUrl: string | null;
+  logoUrlDark: string | null;
+  logoUrlLight: string | null;
+  appName: string;
+};
+
+export function mapApiBranding(raw?: ApiAppBranding | null): AppBranding {
+  const logoUrl = raw?.logoUrl ?? raw?.logo_url ?? null;
+  return {
+    logoUrl: logoUrl ? String(logoUrl) : null,
+    logoUrlDark: raw?.logoUrlDark ?? raw?.logo_url_dark ?? logoUrl ?? null,
+    logoUrlLight: raw?.logoUrlLight ?? raw?.logo_url_light ?? logoUrl ?? null,
+    appName: String(raw?.appName ?? raw?.app_name ?? 'Xtrapay'),
+  };
+}
+
+/** Public app shell — logo, name (no auth required). */
+export async function apiAppConfig() {
+  const data = await apiRequest<{ branding?: ApiAppBranding } | ApiAppBranding>('/config');
+  const branding =
+    data && typeof data === 'object' && 'branding' in data
+      ? (data as { branding?: ApiAppBranding }).branding
+      : (data as ApiAppBranding);
+  return mapApiBranding(branding);
+}
+
 export type ApiBootstrap = {
   user: ApiUserProfile;
+  branding?: ApiAppBranding;
   wallets: Array<{
     id: string;
     name: string;
@@ -567,6 +606,175 @@ export async function apiConfirmPinChange(payload: {
       body: JSON.stringify(payload),
     }
   );
+}
+
+export type ApiLimitsPayload = {
+  dailySpendCap?: number;
+  dailySpent?: number;
+  singleTxnCap?: number;
+  transferCap?: number;
+  posFloatCap?: number;
+  daily_spend_cap?: number;
+  daily_spent?: number;
+  single_txn_cap?: number;
+  transfer_cap?: number;
+  pos_float_cap?: number;
+};
+
+export type AppLimits = {
+  dailySpendCap: number;
+  dailySpent: number;
+  singleTxnCap: number;
+  transferCap: number;
+  posFloatCap: number;
+};
+
+export function mapApiLimits(raw: ApiLimitsPayload): AppLimits {
+  return {
+    dailySpendCap: Number(raw.dailySpendCap ?? raw.daily_spend_cap ?? 0),
+    dailySpent: Number(raw.dailySpent ?? raw.daily_spent ?? 0),
+    singleTxnCap: Number(raw.singleTxnCap ?? raw.single_txn_cap ?? 0),
+    transferCap: Number(raw.transferCap ?? raw.transfer_cap ?? 0),
+    posFloatCap: Number(raw.posFloatCap ?? raw.pos_float_cap ?? 0),
+  };
+}
+
+export async function apiLimits() {
+  const raw = await apiRequest<ApiLimitsPayload>('/limits');
+  return mapApiLimits(raw);
+}
+
+export async function apiUpdateLimits(payload: {
+  dailySpendCap?: number;
+  singleTxnCap?: number;
+  transferCap?: number;
+  posFloatCap?: number;
+  pin: string;
+}) {
+  const raw = await apiRequest<ApiLimitsPayload>('/limits', {
+    method: 'PUT',
+    body: JSON.stringify({
+      dailySpendCap: payload.dailySpendCap,
+      singleTxnCap: payload.singleTxnCap,
+      transferCap: payload.transferCap,
+      posFloatCap: payload.posFloatCap,
+      pin: payload.pin,
+    }),
+  });
+  return mapApiLimits(raw);
+}
+
+export type ApiNetworkRail = {
+  id: string;
+  name: string;
+  backend?: string;
+  icon?: string;
+  status?: 'Active' | 'Degraded' | 'Down' | string;
+  successRate?: number;
+  success_rate?: number;
+  uptime?: number;
+  latencyMs?: number;
+  latency_ms?: number;
+  lastTrafficAt?: string;
+  last_traffic_at?: string;
+  volume24h?: number;
+  volume_24h?: number;
+  lastRef?: string;
+  last_ref?: string;
+  lastTitle?: string;
+  last_title?: string;
+};
+
+export type AppNetworkRail = {
+  id: string;
+  name: string;
+  backend: string;
+  icon: string;
+  status: 'Active' | 'Degraded' | 'Down';
+  successRate: number;
+  uptime: number;
+  latencyMs: number;
+  lastAge: string;
+  volume24h: number;
+  lastRef: string | null;
+  lastTitle: string | null;
+};
+
+export function mapApiNetworkRail(raw: ApiNetworkRail): AppNetworkRail {
+  const statusRaw = String(raw.status || 'Active');
+  const status: AppNetworkRail['status'] =
+    statusRaw === 'Down' || statusRaw === 'Degraded' ? statusRaw : 'Active';
+  const lastAt = raw.lastTrafficAt ?? raw.last_traffic_at;
+  return {
+    id: String(raw.id),
+    name: String(raw.name),
+    backend: String(raw.backend || '—'),
+    icon: String(raw.icon || 'hub'),
+    status,
+    successRate: Number(raw.successRate ?? raw.success_rate ?? 0),
+    uptime: Number(raw.uptime ?? 0),
+    latencyMs: Number(raw.latencyMs ?? raw.latency_ms ?? 0),
+    lastAge: lastAt ? String(lastAt) : '—',
+    volume24h: Number(raw.volume24h ?? raw.volume_24h ?? 0),
+    lastRef: raw.lastRef ?? raw.last_ref ?? null,
+    lastTitle: raw.lastTitle ?? raw.last_title ?? null,
+  };
+}
+
+export async function apiNetworkRails() {
+  const data = await apiRequest<ApiNetworkRail[] | { rails: ApiNetworkRail[] }>('/network/rails');
+  const list = Array.isArray(data) ? data : data?.rails ?? [];
+  return list.map(mapApiNetworkRail);
+}
+
+export type ApiSupportTicket = {
+  id: string;
+  subject: string;
+  category?: string;
+  status?: 'Open' | 'Pending' | 'Resolved' | string;
+  updatedAt?: string;
+  updated_at?: string;
+};
+
+export type AppSupportTicket = {
+  id: string;
+  subject: string;
+  category: string;
+  status: 'Open' | 'Pending' | 'Resolved';
+  updated: string;
+};
+
+export function mapApiSupportTicket(raw: ApiSupportTicket): AppSupportTicket {
+  const statusRaw = String(raw.status || 'Open');
+  const status: AppSupportTicket['status'] =
+    statusRaw === 'Pending' || statusRaw === 'Resolved' ? statusRaw : 'Open';
+  return {
+    id: String(raw.id),
+    subject: String(raw.subject),
+    category: String(raw.category || 'Other'),
+    status,
+    updated: String(raw.updatedAt ?? raw.updated_at ?? '—'),
+  };
+}
+
+export async function apiSupportTickets() {
+  const data = await apiRequest<ApiSupportTicket[] | { tickets: ApiSupportTicket[] }>(
+    '/support/tickets'
+  );
+  const list = Array.isArray(data) ? data : data?.tickets ?? [];
+  return list.map(mapApiSupportTicket);
+}
+
+export async function apiCreateSupportTicket(payload: {
+  category: string;
+  subject: string;
+  message: string;
+}) {
+  const raw = await apiRequest<ApiSupportTicket>('/support/tickets', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  return mapApiSupportTicket(raw);
 }
 
 export async function apiBeneficiaries() {

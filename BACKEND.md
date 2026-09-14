@@ -31,22 +31,25 @@ https://api.xtrapay.ng/v1
 
 ---
 
-## 2. Mock file inventory (current frontend)
+## 2. Data sources (post mock cleanup)
 
-| Location | What it seeds |
-|----------|----------------|
-| `src/data/initialData.ts` | Transactions, beneficiaries, banks, billers, money requests, group pots, nearby peers, shop tills |
-| `src/data/wallets.ts` | Personal / business / sub wallets |
-| `src/data/terminals.ts` | POS terminals + terminal txs |
-| `src/data/appSearch.ts` | Client-only feature catalogue (can stay client or become CMS) |
-| `TransactionContext` | Balances, limits, auth flags, cards freeze, savings, overdraft, transfer flow |
-| `LoansScreen` | Active loans + collection ledger (local) |
-| `LimitsScreen` | Daily / single / transfer / POS caps (local until PIN save) |
-| `SupportScreen` | Tickets (local) |
-| `NetworkScreen` | Rails health blended with txs (should become real heartbeats) |
-| `RecurringPaymentsScreen` | Recurring plans + run history (local) |
-| `ProfileScreen` | Profile / KYC display fields (local) |
-| `DollarCardScreen` | Card UI state (freeze uses context) |
+| Area | Source | Endpoint(s) |
+|------|--------|-------------|
+| Wallets / balances | API | `GET /bootstrap`, `GET /wallets` |
+| Banks / beneficiaries | API | `GET /banks`, `GET /beneficiaries` |
+| Transactions / history | API | `GET /transactions`, bootstrap `recentTransactions` |
+| Savings / pots / ask-money | API | `/savings*`, `/pots*`, `/money-requests*` |
+| VTU / bills | API | `/vtu/*` (Pay Bills, Airtime screens) |
+| Cards / loans / terminals | API | `/cards*`, `/credit*`, `/terminals*` |
+| Business | API | `GET/POST /business/accounts` |
+| Limits | API | `GET/PUT /limits` |
+| Network | API | `GET /network/rails` |
+| Support | API | `GET/POST /support/tickets` |
+| Proximity / shop pay | API | `/proximity/*`, `/shops/*` |
+| `src/data/wallets.ts` | Placeholder only | Single zero-balance personal shell pre-login |
+| `src/data/terminals.ts` | Static labels | `SUPPORT_TX_TYPES` only (not terminal data) |
+| `src/data/appSearch.ts` | Client nav index | Optional CMS later |
+| **Dev-only (not production data)** | Client | Top bar **Simulate inward** (`TransactionContext.simulateInwardTransfer`), Scan-to-pay demo buttons in `ScanToPayModal` |
 | Auth screens | Login/register/KYC/OTP/reset (localStorage flags only) |
 | `LegalScreen` / `CheckoutNowScreen` | Static copy (CMS or keep static) |
 
@@ -442,7 +445,18 @@ NetworkRail {
 }
 ```
 
-### 3.13 Proximity / shop (optional phase)
+### 3.13 App branding
+
+```ts
+AppBranding {
+  logoUrl?: string          // default / fallback
+  logoUrlDark?: string      // header on dark theme
+  logoUrlLight?: string     // header on light theme
+  appName?: string          // default "Xtrapay"
+}
+```
+
+### 3.14 Proximity / shop (optional phase)
 
 ```ts
 NearbyPeer { id, name, device, distance, walletTag, avatarColor }
@@ -486,6 +500,7 @@ Frontend flow today: Intro (client) → Login / Register(basic) → KYC → OTP 
 
 | Method | Path | Purpose |
 |--------|------|---------|
+| GET | `/config` | Public branding — logo URLs + app name (no auth). Same `branding` object may appear on `GET /bootstrap`. |
 | GET | `/me` | Profile |
 | PATCH | `/me` | Update name/email/phone/address/prefs |
 | GET | `/wallets` | List wallets (incl. sub_*) |
@@ -711,7 +726,13 @@ What a logged-in app boot could fetch in one round-trip (optional `GET /bootstra
 ```json
 {
   "user": { "fullName": "Innocent Solomon", "tier": "Tier 3", "phone": "+2348034129981" },
-  "wallets": [ /* INITIAL_WALLETS shape */ ],
+  "branding": {
+    "logoUrl": "https://cdn.example.com/xtrapay/logo.svg",
+    "logoUrlDark": "https://cdn.example.com/xtrapay/logo-dark.svg",
+    "logoUrlLight": "https://cdn.example.com/xtrapay/logo-light.svg",
+    "appName": "Xtrapay"
+  },
+  "wallets": [ /* WalletAccount[] from GET /wallets */ ],
   "selectedWalletId": "personal",
   "limits": { "dailySpendCap": 5000000, "dailySpent": 2450000, "singleTxnCap": 1000000, "transferCap": 500000, "posFloatCap": 2000000 },
   "savings": { "flexibleBalance": 214558.04, "strictBalance": 2250, "strictAutoSave": true },
@@ -728,11 +749,10 @@ What a logged-in app boot could fetch in one round-trip (optional `GET /bootstra
 
 When APIs exist:
 
-- [ ] Remove `localStorage` fake auth; use real tokens  
-- [ ] Replace `INITIAL_*` imports with React Query / fetch layer  
-- [ ] Move mutations in `TransactionContext` to API clients; keep UI toasts  
-- [ ] Replace screen-local seeds (loans, recurring, support, limits) with hooks  
-- [ ] Drive `NetworkScreen` from `/network/rails`  
+- [x] Remove `src/data/initialData.ts` mock seeds  
+- [x] Wallets: placeholder shell until `GET /wallets`  
+- [x] Limits / network / support → live API clients  
+- [ ] Optional: remove dev **Simulate inward** + QR/OCR demo when staging has test VA inflows  
 - [ ] Keep `appSearch.ts` client-side until a CMS is needed  
 
 ---
@@ -743,7 +763,8 @@ When APIs exist:
 |---------|------|
 | Types | `src/types.ts` |
 | Context / actions | `src/context/TransactionContext.tsx` |
-| Seeds | `src/data/initialData.ts`, `wallets.ts`, `terminals.ts` |
+| API client | `src/lib/xtrapayApi.ts` |
+| Placeholders | `src/data/wallets.ts`, `src/data/terminals.ts` (labels only) |
 | Auth UI | `src/components/auth/*` |
 | Screens | `src/components/screens/*` |
 

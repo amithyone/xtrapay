@@ -66,8 +66,20 @@ const money = (n: number) =>
  * Spec: Terminal → My Terminals → Details → Fund / Withdraw / … / Support
  */
 export const TerminalScreen: React.FC = () => {
-  const { personalBalance, showToast, theme, refreshBalances, userProfile, setActiveScreen, posManagementUnlocked, unlockPosManagement } =
-    useTransactions();
+  const {
+    personalBalance,
+    showToast,
+    theme,
+    refreshBalances,
+    userProfile,
+    accountFullName,
+    setActiveScreen,
+    posManagementUnlocked,
+    unlockPosManagement,
+  } = useTransactions();
+  const agentLabel = userProfile?.customerId
+    ? `${userProfile.fullName || accountFullName || 'Agent'} · ${userProfile.customerId}`
+    : userProfile?.fullName || accountFullName || 'Agent';
   const isLight = theme === 'light';
 
   const [terminals, setTerminals] = useState<Terminal[]>([]);
@@ -1244,7 +1256,7 @@ export const TerminalScreen: React.FC = () => {
             <SheetHeader title="Terminal Support" onClose={closeSheet} />
             <div className="rounded-2xl border border-[var(--glass-border)] p-3 text-[11px] space-y-1">
               <p className="text-[var(--muted)]">
-                Agent · <span className="text-[var(--text)]">Innocent Solomon · AG-1003925</span>
+                Agent · <span className="text-[var(--text)]">{agentLabel}</span>
               </p>
               <p className="text-[var(--muted)]">
                 Terminal ·{' '}

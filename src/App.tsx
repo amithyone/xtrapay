@@ -35,7 +35,6 @@ import { AuthFlow } from './components/auth/AuthFlow';
 import { TransferSuccessModal } from './components/modals/TransferSuccessModal';
 import { QrModal } from './components/modals/QrModal';
 import { ShareModal } from './components/modals/ShareModal';
-import { SimulateModal } from './components/modals/SimulateModal';
 import { NearbyPayModal } from './components/modals/NearbyPayModal';
 import { PayAtShopModal } from './components/modals/PayAtShopModal';
 import { ScanToPayModal } from './components/modals/ScanToPayModal';
@@ -152,7 +151,6 @@ const AppContent: React.FC = () => {
             <TransferSuccessModal />
             <QrModal />
             <ShareModal />
-            <SimulateModal />
             <NearbyPayModal />
             <PayAtShopModal />
             <ScanToPayModal />

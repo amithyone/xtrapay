@@ -1,5 +1,7 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useTransactions } from '../../context/TransactionContext';
+import { ApiError } from '../../lib/api';
+import { apiLimits, apiUpdateLimits } from '../../lib/xtrapayApi';
 import { Icon } from '../Icon';
 import { PinSheetModal } from '../common/PinSheetModal';
 
@@ -17,22 +19,52 @@ const kycLabel = (status: string) => {
 type LimitKey = 'daily' | 'single' | 'pos' | 'transfer';
 
 /**
- * Limit settings — daily, single debit, POS float, and transfer caps.
+ * Limit settings — GET/PUT /limits (no local mock caps).
  */
 export const LimitsScreen: React.FC = () => {
-  const { dailySpent, dailyLimit, overdraftLimit, accountTier, kycStatus, showToast } =
-    useTransactions();
+  const {
+    dailySpent,
+    dailyLimit,
+    overdraftLimit,
+    accountTier,
+    kycStatus,
+    showToast,
+    setDailyLimit,
+    setDailySpent,
+  } = useTransactions();
   const limitLeft = Math.max(0, dailyLimit - dailySpent);
 
+  const [loading, setLoading] = useState(true);
   const [daily, setDaily] = useState(dailyLimit);
-  const [single, setSingle] = useState(1_000_000);
-  const [pos, setPos] = useState(2_000_000);
-  const [transfer, setTransfer] = useState(500_000);
+  const [single, setSingle] = useState(0);
+  const [pos, setPos] = useState(0);
+  const [transfer, setTransfer] = useState(0);
   const [pinOpen, setPinOpen] = useState(false);
   const [pending, setPending] = useState<{ key: LimitKey; value: number } | null>(null);
+  const [busy, setBusy] = useState(false);
 
   const fieldClass =
     'auth-field w-full h-12 px-4 rounded-2xl text-[var(--text)] text-sm focus:outline-none transition-all placeholder:text-[var(--muted)]';
+
+  const load = useCallback(async () => {
+    try {
+      const caps = await apiLimits();
+      setDaily(caps.dailySpendCap || dailyLimit);
+      setSingle(caps.singleTxnCap);
+      setPos(caps.posFloatCap);
+      setTransfer(caps.transferCap);
+      setDailyLimit(caps.dailySpendCap);
+      setDailySpent(caps.dailySpent);
+    } catch {
+      setDaily(dailyLimit);
+    } finally {
+      setLoading(false);
+    }
+  }, [dailyLimit, setDailyLimit, setDailySpent]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   const rows: {
     key: LimitKey;
@@ -84,6 +116,14 @@ export const LimitsScreen: React.FC = () => {
     setPending({ key, value });
     setPinOpen(true);
   };
+
+  if (loading) {
+    return (
+      <main className="flex-1 min-w-0 px-5 pt-4 pb-32" id="limits-screen">
+        <p className="text-[13px] text-[var(--muted)] text-center py-16">Loading limits…</p>
+      </main>
+    );
+  }
 
   return (
     <main className="flex-1 min-w-0 px-5 pt-4 pb-32 space-y-4" id="limits-screen">
@@ -137,7 +177,7 @@ export const LimitsScreen: React.FC = () => {
               <input
                 className={`${fieldClass} flex-1 font-mono`}
                 inputMode="numeric"
-                value={row.value.toLocaleString('en-US')}
+                value={row.value ? row.value.toLocaleString('en-US') : ''}
                 onChange={e => {
                   const n = Number(e.target.value.replace(/\D/g, ''));
                   row.setValue(Number.isFinite(n) ? n : 0);
@@ -163,22 +203,49 @@ export const LimitsScreen: React.FC = () => {
 
       <PinSheetModal
         isOpen={pinOpen}
-        onClose={() => setPinOpen(false)}
+        onClose={() => !busy && setPinOpen(false)}
         title="Confirm limit change"
         subtitle={
           pending
             ? `Set ${pending.key} limit to ${money(pending.value)}`
             : 'Enter your transaction PIN'
         }
-        onSuccess={() => {
-          setPinOpen(false);
+        onSuccess={async pin => {
           if (!pending) return;
-          showToast(
-            'Limit updated',
-            `${pending.key === 'daily' ? 'Daily' : pending.key === 'single' ? 'Single' : pending.key === 'pos' ? 'POS' : 'Transfer'} cap is now ${money(pending.value)}.`,
-            'success'
-          );
-          setPending(null);
+          setBusy(true);
+          try {
+            const patch =
+              pending.key === 'daily'
+                ? { dailySpendCap: pending.value }
+                : pending.key === 'single'
+                  ? { singleTxnCap: pending.value }
+                  : pending.key === 'pos'
+                    ? { posFloatCap: pending.value }
+                    : { transferCap: pending.value };
+            const next = await apiUpdateLimits({ ...patch, pin });
+            setDaily(next.dailySpendCap);
+            setSingle(next.singleTxnCap);
+            setPos(next.posFloatCap);
+            setTransfer(next.transferCap);
+            setDailyLimit(next.dailySpendCap);
+            setDailySpent(next.dailySpent);
+            setPinOpen(false);
+            showToast(
+              'Limit updated',
+              `${pending.key === 'daily' ? 'Daily' : pending.key === 'single' ? 'Single' : pending.key === 'pos' ? 'POS' : 'Transfer'} cap is now ${money(pending.value)}.`,
+              'success'
+            );
+            setPending(null);
+          } catch (err) {
+            showToast(
+              'Could not update',
+              err instanceof ApiError ? err.message : 'Limits API unavailable.',
+              'warning'
+            );
+            throw err instanceof Error ? err : new Error('Limit update failed');
+          } finally {
+            setBusy(false);
+          }
         }}
       />
     </main>

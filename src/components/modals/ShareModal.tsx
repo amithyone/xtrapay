@@ -3,14 +3,15 @@ import { useTransactions } from '../../context/TransactionContext';
 import { Icon } from '../Icon';
 
 export const ShareModal: React.FC = () => {
-  const { isShareOpen, setIsShareOpen, accountContext, showToast } = useTransactions();
+  const { isShareOpen, setIsShareOpen, selectedWallet, accountFullName, showToast } = useTransactions();
 
   if (!isShareOpen) return null;
 
-  const acct =
-    accountContext === 'personal'
-      ? { name: 'Innocent Solomon', number: '1000003925', bank: 'RUBIES MFB' }
-      : { name: 'Xtrapay Global Ventures', number: '2048991204', bank: 'PROVIDUS BANK' };
+  const acct = {
+    name: selectedWallet.accountName || accountFullName || selectedWallet.name,
+    number: selectedWallet.accountNumber,
+    bank: selectedWallet.bankName,
+  };
 
   const shareText = `Send money to my Xtrapay account:\nBank: ${acct.bank}\nAccount No: ${acct.number}\nAccount Name: ${acct.name}`;
 

@@ -13,9 +13,8 @@ import {
   SavingsPlanType,
   SavingsSummary,
 } from '../types';
-import { SUPPORTED_BANKS } from '../data/initialData';
 import {
-  INITIAL_WALLETS,
+  PLACEHOLDER_WALLETS,
   walletParentContext,
   type WalletAccount,
 } from '../data/wallets';
@@ -25,7 +24,10 @@ import {
   apiAcceptPot,
   apiBanks,
   apiBeneficiaries,
+  apiAppConfig,
   apiBootstrap,
+  type AppBranding,
+  mapApiBranding,
   apiCancelMoneyRequest,
   apiContributePot,
   apiCreateMoneyRequest,
@@ -146,6 +148,8 @@ interface TransactionContextType {
   }) => Promise<boolean>;
   dailySpent: number;
   dailyLimit: number;
+  setDailySpent: (n: number) => void;
+  setDailyLimit: (n: number) => void;
   cardFrozen: boolean;
   setCardFrozen: (frozen: boolean) => void;
   biometricsActive: boolean;
@@ -159,6 +163,7 @@ interface TransactionContextType {
   kycStatus: string;
   accountFullName: string;
   userProfile: UserProfile | null;
+  appBranding: AppBranding;
   refreshProfile: () => Promise<void>;
   updateProfile: (
     patch: Parameters<typeof apiUpdateMe>[0]
@@ -365,8 +370,8 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
   // Balances
   // Account
   const [accountContext, setAccountContextState] = useState<AccountContext>('personal');
-  const [wallets, setWallets] = useState<WalletAccount[]>(INITIAL_WALLETS);
-  const [banks, setBanks] = useState<ApiBank[]>(SUPPORTED_BANKS);
+  const [wallets, setWallets] = useState<WalletAccount[]>(PLACEHOLDER_WALLETS);
+  const [banks, setBanks] = useState<ApiBank[]>([]);
   const [banksLoading, setBanksLoading] = useState(false);
   const [selectedWalletId, setSelectedWalletId] = useState<string>('personal');
   const [personalBalance, setPersonalBalance] = useState<number>(0);
@@ -390,6 +395,9 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
   const [kycStatus, setKycStatus] = useState<string>('none');
   const [accountFullName, setAccountFullName] = useState<string>('');
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [appBranding, setAppBranding] = useState<AppBranding>(() =>
+    mapApiBranding(null)
+  );
 
   const applyUserProfile = (profile: UserProfile) => {
     setUserProfile(profile);
@@ -467,14 +475,18 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
 
   const applyBootstrap = async () => {
     const data = await apiBootstrap();
+    if (data.branding) {
+      setAppBranding(mapApiBranding(data.branding));
+    }
     const mapped = mapApiWallets(data.wallets);
-    setWallets(mapped.length ? mapped : INITIAL_WALLETS);
+    const walletList = mapped.length ? mapped : PLACEHOLDER_WALLETS;
+    setWallets(walletList);
     const selected =
       data.selectedWalletId && mapped.some(w => w.id === data.selectedWalletId)
         ? data.selectedWalletId
         : mapped.find(w => w.kind === 'personal')?.id ?? mapped[0]?.id ?? 'personal';
     setSelectedWalletId(selected);
-    applyWalletBalances(mapped.length ? mapped : INITIAL_WALLETS);
+    applyWalletBalances(walletList);
     applySavingsSummary({
       flexibleBalance: data.savings.flexibleBalance,
       strictBalance: data.savings.strictBalance,
@@ -586,6 +598,10 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
     setPosManagementUnlocked(false);
     setUserProfile(null);
     setAccountFullName('');
+    setWallets(PLACEHOLDER_WALLETS);
+    setTransactions([]);
+    setBeneficiaries([]);
+    setBanks([]);
     setMoneyRequests([]);
     setGroupPots([]);
     setActiveScreenState('hub');
@@ -615,6 +631,14 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
   const lockPosManagement = () => setPosManagementUnlocked(false);
 
   useEffect(() => {
+    void apiAppConfig()
+      .then(setAppBranding)
+      .catch(() => {
+        /* keep default / bootstrap branding */
+      });
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     const token = getAccessToken();
     if (!token) {
@@ -642,7 +666,7 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
   }, []);
 
   const selectedWallet =
-    wallets.find(w => w.id === selectedWalletId) ?? wallets[0] ?? INITIAL_WALLETS[0];
+    wallets.find(w => w.id === selectedWalletId) ?? wallets[0] ?? PLACEHOLDER_WALLETS[0];
 
   const selectWallet = (id: string) => {
     const wallet = wallets.find(w => w.id === id);
@@ -1147,7 +1171,7 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
       status: 'Settled',
       category: 'p2p',
       reference: refCode,
-      recipient: 'Innocent Solomon',
+      recipient: accountFullName || 'Account holder',
       note: 'Instant P2P Settlement Cleared',
     };
 
@@ -1570,6 +1594,8 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
         createSavingsPlan,
         dailySpent,
         dailyLimit,
+        setDailySpent,
+        setDailyLimit,
         cardFrozen,
         setCardFrozen,
         biometricsActive,
@@ -1583,6 +1609,7 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
         kycStatus,
         accountFullName,
         userProfile,
+        appBranding,
         refreshProfile,
         updateProfile,
         deleteAccount,
