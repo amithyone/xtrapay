@@ -8,7 +8,14 @@ export type ReceiptData = {
   bankName: string;
   accountNumber: string;
   reference: string;
+  sessionId?: string;
   narration?: string;
+  date?: string;
+  token?: string;
+  cardLast4?: string;
+  cardUsdAmount?: string;
+  typeLabel?: string;
+  categoryLabel?: string;
   initTime: string;
   processedTime: string;
   settledTime: string;
@@ -31,6 +38,8 @@ export function receiptFromTransfer(transfer: ActiveProcessingTransfer): Receipt
     statusLabel: 'SETTLED',
     headline: transfer.channel === 'wallet' ? 'Wallet transfer sent' : 'Transfer sent',
     channel: transfer.channel || 'bank',
+    typeLabel: 'Debit',
+    categoryLabel: 'Transfer',
   };
 }
 
@@ -40,19 +49,67 @@ export function receiptFromTransaction(tx: Transaction): ReceiptData {
     tx.title.replace(/^(Transfer to|Received from|Payment to)\s+/i, '') ||
     'Xtrapay customer';
   const time = tx.fullTime || tx.timestamp || '—';
+  const categoryLabel = (() => {
+    switch (tx.category) {
+      case 'bill':
+        return 'Bill pay';
+      case 'utility':
+        return 'Utility';
+      case 'savings':
+        return 'Savings';
+      case 'card':
+        return 'Card';
+      case 'p2p':
+        return 'P2P';
+      default:
+        return 'Transfer';
+    }
+  })();
   return {
     amount: tx.amount,
     recipientName: recipient,
-    bankName: tx.bank || 'Xtrapay',
-    accountNumber: tx.token || '—',
+    bankName: tx.bank || (tx.category === 'transfer' ? 'Xtrapay' : ''),
+    accountNumber: tx.accountNumber || '',
     reference: tx.reference,
+    sessionId: tx.sessionId,
     narration: tx.note || tx.subtitle,
+    date: tx.date,
+    token: tx.token,
+    cardLast4: tx.cardLast4,
+    cardUsdAmount: tx.cardUsdAmount,
+    typeLabel: tx.type === 'credit' ? 'Credit' : 'Debit',
+    categoryLabel,
     initTime: time,
     processedTime: time,
     settledTime: time,
     statusLabel: String(tx.status || 'SETTLED').toUpperCase(),
     headline: tx.type === 'credit' ? 'Payment received' : 'Payment sent',
+    channel: tx.bank ? 'bank' : undefined,
   };
+}
+
+/** Detail rows for PNG/PDF — only include fields that have a value. */
+function receiptDetailRows(transfer: ReceiptData): Array<[string, string]> {
+  const rows: Array<[string, string]> = [['Reference', transfer.reference]];
+  if (transfer.sessionId?.trim()) rows.push(['Session ID', transfer.sessionId.trim()]);
+  if (transfer.date?.trim()) {
+    const when = [transfer.date.trim(), transfer.settledTime || transfer.initTime]
+      .filter(Boolean)
+      .join(' · ');
+    rows.push(['Date & time', when]);
+  }
+  if (transfer.typeLabel) rows.push(['Type', transfer.typeLabel]);
+  if (transfer.categoryLabel) rows.push(['Category', transfer.categoryLabel]);
+  if (transfer.bankName?.trim()) rows.push(['Bank', transfer.bankName.trim()]);
+  if (transfer.accountNumber?.trim() && transfer.accountNumber !== '—') {
+    rows.push(['Account', transfer.accountNumber.trim()]);
+  }
+  if (transfer.token?.trim()) rows.push(['Token', transfer.token.trim()]);
+  if (transfer.cardLast4?.trim()) rows.push(['Card', `•••• ${transfer.cardLast4.trim()}`]);
+  if (transfer.cardUsdAmount?.trim()) rows.push(['USD amount', transfer.cardUsdAmount.trim()]);
+  rows.push(['Narration', transfer.narration?.trim() || 'Instant Funds Transfer']);
+  rows.push(['Status', transfer.statusLabel || 'Settled']);
+  return rows;
 }
 
 const COLORS = {
@@ -124,29 +181,46 @@ function roundRect(
   ctx.closePath();
 }
 
-function wrapText(
+/** Wrap long unbroken strings (session IDs) by character when needed. */
+function wrapValueLines(
   ctx: CanvasRenderingContext2D,
   text: string,
-  x: number,
-  y: number,
-  maxWidth: number,
-  lineHeight: number
-) {
+  maxWidth: number
+): string[] {
+  if (ctx.measureText(text).width <= maxWidth) return [text];
   const words = text.split(/\s+/);
+  const lines: string[] = [];
   let line = '';
-  let cy = y;
-  for (const word of words) {
-    const test = line ? `${line} ${word}` : word;
-    if (ctx.measureText(test).width > maxWidth && line) {
-      ctx.fillText(line, x, cy);
-      line = word;
-      cy += lineHeight;
-    } else {
-      line = test;
+  const pushChunk = (chunk: string) => {
+    if (!chunk) return;
+    if (ctx.measureText(chunk).width <= maxWidth) {
+      if (line && ctx.measureText(`${line} ${chunk}`).width <= maxWidth) {
+        line = `${line} ${chunk}`;
+      } else {
+        if (line) lines.push(line);
+        line = chunk;
+      }
+      return;
     }
-  }
-  if (line) ctx.fillText(line, x, cy);
-  return cy;
+    if (line) {
+      lines.push(line);
+      line = '';
+    }
+    let buf = '';
+    for (const ch of chunk) {
+      const next = buf + ch;
+      if (ctx.measureText(next).width > maxWidth && buf) {
+        lines.push(buf);
+        buf = ch;
+      } else {
+        buf = next;
+      }
+    }
+    line = buf;
+  };
+  for (const word of words) pushChunk(word);
+  if (line) lines.push(line);
+  return lines.length ? lines : [text];
 }
 
 /** Paint a receipt that mirrors TransferSuccessModal frosted styling. */
@@ -156,118 +230,152 @@ export function renderTransferReceiptCanvas(
 ): HTMLCanvasElement {
   const c = COLORS[theme];
   const W = 720;
-  const H = 1180;
+  const padX = 40;
+  const cardX = padX;
+  const cardW = W - padX * 2;
+  const innerX = cardX + 32;
+  const innerW = cardW - 64;
+  const details = receiptDetailRows(transfer);
+  const cx = W / 2;
+  const timelineH = 168;
+
+  const probe = document.createElement('canvas').getContext('2d');
+  if (!probe) throw new Error('Canvas unavailable');
+
+  probe.font = receiptFont(600, 18);
+  const nameLines = wrapValueLines(probe, transfer.recipientName, innerW);
+  const nameH = nameLines.length * 24;
+
+  probe.font = receiptFont(600, 13);
+  const labelW = Math.min(140, innerW * 0.34);
+  const valueMaxW = innerW - labelW - 36;
+  const detailRowHeights = details.map(([, v]) => {
+    const lines = wrapValueLines(probe, v, valueMaxW);
+    return Math.max(28, lines.length * 18 + 8);
+  });
+  const detailsH = detailRowHeights.reduce((a, b) => a + b, 0);
+
+  // Exact layout cursor (must match draw order below)
+  const cardY = 36;
+  let y = cardY + 36;
+  y += 86; // brand block
+  y += 62; // success mark
+  y += 36; // amount
+  y += 26; // headline
+  y += 24; // sent to / from
+  y += nameH + 28; // recipient
+  y += 44; // ref chip
+  y += timelineH + 22; // progress + gap
+  y += 10 + detailsH + 24; // details panel padding + rows + footer gap
+  const cardH = y - cardY;
+  const H = cardY + cardH + cardY;
+
   const canvas = document.createElement('canvas');
   canvas.width = W;
   canvas.height = H;
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Canvas unavailable');
 
-  // Background atmosphere
   const bg = ctx.createLinearGradient(0, 0, W, H);
   bg.addColorStop(0, c.bg0);
   bg.addColorStop(1, c.bg1);
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, W, H);
 
-  // Soft accent orb
-  const orb = ctx.createRadialGradient(W * 0.8, 80, 20, W * 0.8, 80, 280);
-  orb.addColorStop(0, `${c.accent}33`);
+  const orb = ctx.createRadialGradient(W * 0.82, 60, 10, W * 0.82, 60, 220);
+  orb.addColorStop(0, `${c.accent}2a`);
   orb.addColorStop(1, 'transparent');
   ctx.fillStyle = orb;
   ctx.fillRect(0, 0, W, H);
 
-  // Main glass card
-  const cardX = 40;
-  const cardY = 48;
-  const cardW = W - 80;
-  const cardH = H - 96;
-  roundRect(ctx, cardX, cardY, cardW, cardH, 36);
+  roundRect(ctx, cardX, cardY, cardW, cardH, 28);
   ctx.fillStyle = c.glass;
   ctx.fill();
   ctx.strokeStyle = c.border;
-  ctx.lineWidth = 2;
+  ctx.lineWidth = 1.5;
   ctx.stroke();
 
-  // Brand row
-  ctx.fillStyle = c.accent;
-  ctx.font = receiptFont(700, 28);
-  ctx.textAlign = 'left';
-  ctx.fillText('Xtrapay', cardX + 40, cardY + 64);
-  ctx.fillStyle = c.muted;
-  ctx.font = receiptFont(600, 14);
-  ctx.fillText('Transfer receipt', cardX + 40, cardY + 92);
+  y = cardY + 36;
 
-  // E2EE chip
-  roundRect(ctx, cardX + cardW - 130, cardY + 42, 90, 28, 14);
+  // Brand
+  ctx.fillStyle = c.accent;
+  ctx.font = receiptFont(700, 24);
+  ctx.textAlign = 'left';
+  ctx.fillText('Xtrapay', innerX, y + 8);
+  ctx.fillStyle = c.muted;
+  ctx.font = receiptFont(500, 13);
+  ctx.fillText('Transaction receipt', innerX, y + 30);
+
+  roundRect(ctx, cardX + cardW - 108, y - 6, 76, 26, 13);
   ctx.fillStyle = c.successBg;
   ctx.fill();
   ctx.strokeStyle = `${c.success}55`;
   ctx.stroke();
   ctx.fillStyle = c.success;
-  ctx.font = receiptFont(700, 12);
+  ctx.font = receiptFont(700, 11);
   ctx.textAlign = 'center';
-  ctx.fillText('E2EE', cardX + cardW - 85, cardY + 61);
+  ctx.fillText('E2EE', cardX + cardW - 70, y + 12);
+  y += 86;
 
-  // Success badge
-  const cx = W / 2;
+  // Success mark
   ctx.beginPath();
-  ctx.arc(cx, cardY + 190, 42, 0, Math.PI * 2);
+  ctx.arc(cx, y + 18, 28, 0, Math.PI * 2);
   ctx.fillStyle = c.successBg;
   ctx.fill();
-  ctx.strokeStyle = `${c.success}66`;
-  ctx.lineWidth = 2;
-  ctx.stroke();
   ctx.beginPath();
-  ctx.arc(cx, cardY + 190, 30, 0, Math.PI * 2);
+  ctx.arc(cx, y + 18, 20, 0, Math.PI * 2);
   ctx.fillStyle = c.success;
   ctx.fill();
   ctx.strokeStyle = '#fff';
-  ctx.lineWidth = 4;
+  ctx.lineWidth = 3;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   ctx.beginPath();
-  ctx.moveTo(cx - 10, cardY + 190);
-  ctx.lineTo(cx - 2, cardY + 198);
-  ctx.lineTo(cx + 12, cardY + 182);
+  ctx.moveTo(cx - 7, y + 18);
+  ctx.lineTo(cx - 1, y + 24);
+  ctx.lineTo(cx + 9, y + 12);
   ctx.stroke();
+  y += 62;
 
-  // Amount
   ctx.fillStyle = c.text;
-  ctx.font = receiptFont(700, 52);
+  ctx.font = receiptFont(700, 40);
   ctx.textAlign = 'center';
-  ctx.fillText(money(transfer.amount), cx, cardY + 290);
+  ctx.fillText(money(transfer.amount), cx, y);
+  y += 36;
 
-  ctx.fillStyle = c.text;
-  ctx.font = receiptFont(600, 28);
-  ctx.fillText(transfer.headline || 'Transfer sent', cx, cardY + 340);
+  ctx.font = receiptFont(600, 20);
+  ctx.fillText(transfer.headline || 'Transfer sent', cx, y);
+  y += 26;
 
   ctx.fillStyle = c.muted;
-  ctx.font = receiptFont(400, 18);
-  ctx.fillText('sent to', cx, cardY + 372);
-  ctx.fillStyle = c.text;
-  ctx.font = receiptFont(600, 20);
-  wrapText(ctx, transfer.recipientName, cx, cardY + 402, cardW - 100, 26);
+  ctx.font = receiptFont(400, 14);
+  ctx.fillText(transfer.typeLabel === 'Credit' ? 'from' : 'sent to', cx, y);
+  y += 24;
 
-  // Ref chip
+  ctx.fillStyle = c.text;
+  ctx.font = receiptFont(600, 18);
+  nameLines.forEach((line, i) => {
+    ctx.fillText(line, cx, y + i * 24);
+  });
+  y += nameH + 28;
+
   const refLabel = `REF  ${transfer.reference}`;
-  ctx.font = receiptFont(600, 16);
-  const refW = Math.max(280, ctx.measureText(refLabel).width + 48);
-  roundRect(ctx, cx - refW / 2, cardY + 430, refW, 44, 22);
+  ctx.font = receiptFont(600, 14);
+  const refW = Math.min(innerW, Math.max(240, ctx.measureText(refLabel).width + 40));
+  roundRect(ctx, cx - refW / 2, y - 18, refW, 36, 18);
   ctx.fillStyle = theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)';
   ctx.fill();
   ctx.strokeStyle = c.border;
-  ctx.lineWidth = 1.5;
+  ctx.lineWidth = 1;
   ctx.stroke();
   ctx.fillStyle = c.accent;
-  ctx.fillText(refLabel, cx, cardY + 458);
+  ctx.fillText(refLabel, cx, y + 5);
+  y += 44;
 
-  // Progress card
-  const boxX = cardX + 36;
-  const boxY = cardY + 510;
-  const boxW = cardW - 72;
-  const boxH = 320;
-  roundRect(ctx, boxX, boxY, boxW, boxH, 24);
+  const boxX = innerX;
+  const boxW = innerW;
+  const boxY = y;
+  roundRect(ctx, boxX, boxY, boxW, timelineH, 18);
   ctx.fillStyle = theme === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
   ctx.fill();
   ctx.strokeStyle = c.border;
@@ -275,102 +383,105 @@ export function renderTransferReceiptCanvas(
 
   ctx.textAlign = 'left';
   ctx.fillStyle = c.muted;
-  ctx.font = receiptFont(500, 14);
-  ctx.fillText('Here is how your transfer progressed.', boxX + 24, boxY + 36);
+  ctx.font = receiptFont(500, 12);
+  ctx.fillText('Transfer progress', boxX + 18, boxY + 26);
 
-  roundRect(ctx, boxX + boxW - 110, boxY + 18, 86, 26, 13);
+  roundRect(ctx, boxX + boxW - 96, boxY + 12, 78, 22, 11);
   ctx.fillStyle = c.successBg;
   ctx.fill();
   ctx.fillStyle = c.success;
-  ctx.font = receiptFont(700, 11);
+  ctx.font = receiptFont(700, 10);
   ctx.textAlign = 'center';
-  ctx.fillText(transfer.statusLabel || 'SETTLED', boxX + boxW - 67, boxY + 36);
+  ctx.fillText((transfer.statusLabel || 'SETTLED').slice(0, 12), boxX + boxW - 57, boxY + 27);
 
   const steps = [
     {
-      title: 'Transfer initiated',
+      title: 'Initiated',
       detail:
         transfer.channel === 'wallet'
-          ? `Debit of ${money(transfer.amount)} confirmed from your Xtrapay wallet`
-          : `Debit of ${money(transfer.amount)} confirmed from Xtrapay Vault`,
+          ? `${money(transfer.amount)} from your wallet`
+          : `${money(transfer.amount)} from Xtrapay Vault`,
       time: transfer.initTime || '—',
     },
     {
-      title: 'Transfer processed',
+      title: 'Processed',
       detail:
         transfer.channel === 'wallet'
-          ? 'Cleared instantly on Xtrapay ledger (no NIP)'
-          : 'Cleared via NIBSS Instant Payment (NIP) switch',
+          ? 'Cleared on Xtrapay ledger'
+          : 'NIBSS Instant Payment (NIP)',
       time: transfer.processedTime || '—',
     },
     {
-      title: 'Received by recipient',
+      title: 'Received',
       detail:
         transfer.channel === 'wallet'
-          ? `Credited to ${transfer.recipientName} · Xtrapay Wallet`
-          : `Credited to ${transfer.recipientName} · ${transfer.bankName}`,
+          ? `${transfer.recipientName} · Wallet`
+          : `${transfer.recipientName} · ${transfer.bankName || 'Bank'}`,
       time: transfer.settledTime || '—',
     },
   ];
 
-  let sy = boxY + 78;
+  let sy = boxY + 52;
   steps.forEach((step, i) => {
     ctx.beginPath();
-    ctx.arc(boxX + 36, sy + 8, 12, 0, Math.PI * 2);
+    ctx.arc(boxX + 28, sy + 4, 8, 0, Math.PI * 2);
     ctx.fillStyle = c.success;
     ctx.fill();
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 2.5;
-    ctx.beginPath();
-    ctx.moveTo(boxX + 30, sy + 8);
-    ctx.lineTo(boxX + 34, sy + 12);
-    ctx.lineTo(boxX + 42, sy + 4);
-    ctx.stroke();
-
     if (i < steps.length - 1) {
-      ctx.strokeStyle = `${c.success}66`;
-      ctx.lineWidth = 3;
+      ctx.strokeStyle = `${c.success}55`;
+      ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.moveTo(boxX + 36, sy + 22);
-      ctx.lineTo(boxX + 36, sy + 78);
+      ctx.moveTo(boxX + 28, sy + 14);
+      ctx.lineTo(boxX + 28, sy + 42);
       ctx.stroke();
     }
-
     ctx.textAlign = 'left';
     ctx.fillStyle = c.text;
-    ctx.font = receiptFont(600, 16);
-    ctx.fillText(step.title, boxX + 64, sy + 4);
+    ctx.font = receiptFont(600, 13);
+    ctx.fillText(step.title, boxX + 48, sy);
     ctx.textAlign = 'right';
     ctx.fillStyle = c.muted;
-    ctx.font = receiptFont(500, 13);
-    ctx.fillText(step.time, boxX + boxW - 24, sy + 4);
+    ctx.font = receiptFont(500, 11);
+    ctx.fillText(step.time, boxX + boxW - 18, sy);
     ctx.textAlign = 'left';
     ctx.fillStyle = c.muted;
-    ctx.font = receiptFont(400, 13);
-    wrapText(ctx, step.detail, boxX + 64, sy + 28, boxW - 110, 18);
-    sy += 84;
+    ctx.font = receiptFont(400, 12);
+    let detail = step.detail;
+    const detailMax = boxW - 110;
+    if (ctx.measureText(detail).width > detailMax) {
+      while (detail.length > 4 && ctx.measureText(`${detail}…`).width > detailMax) {
+        detail = detail.slice(0, -1);
+      }
+      detail = `${detail}…`;
+    }
+    ctx.fillText(detail, boxX + 48, sy + 18);
+    sy += 38;
   });
 
-  // Details
-  const details = [
-    ['Bank', transfer.bankName],
-    ['Account', transfer.accountNumber],
-    ['Narration', transfer.narration || 'Instant Funds Transfer'],
-    ['Status', transfer.statusLabel || 'Settled'],
-  ];
-  let dy = boxY + boxH + 36;
-  details.forEach(([k, v]) => {
+  y = boxY + timelineH + 22;
+
+  const detailsTop = y;
+  roundRect(ctx, boxX, detailsTop - 8, boxW, detailsH + 28, 18);
+  ctx.fillStyle = theme === 'dark' ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.025)';
+  ctx.fill();
+  ctx.strokeStyle = c.border;
+  ctx.stroke();
+
+  let dy = detailsTop + 10;
+  details.forEach(([k, v], idx) => {
+    ctx.font = receiptFont(500, 12);
     ctx.fillStyle = c.muted;
-    ctx.font = receiptFont(500, 14);
     ctx.textAlign = 'left';
-    ctx.fillText(k, boxX, dy);
+    ctx.fillText(k, boxX + 18, dy + 12);
+
+    ctx.font = receiptFont(600, 13);
     ctx.fillStyle = c.text;
-    ctx.font = receiptFont(600, 15);
     ctx.textAlign = 'right';
-    const truncated =
-      ctx.measureText(v).width > boxW * 0.55 ? `${v.slice(0, 28)}…` : v;
-    ctx.fillText(truncated, boxX + boxW, dy);
-    dy += 34;
+    const lines = wrapValueLines(ctx, v, valueMaxW);
+    lines.forEach((line, i) => {
+      ctx.fillText(line, boxX + boxW - 18, dy + 12 + i * 18);
+    });
+    dy += detailRowHeights[idx] ?? Math.max(28, lines.length * 18 + 8);
   });
 
   return canvas;
@@ -422,13 +533,14 @@ export async function downloadTransferReceiptPdf(
   const jpegBase64 = jpegDataUrl.split(',')[1];
   const jpegBytes = Uint8Array.from(atob(jpegBase64), c => c.charCodeAt(0));
 
+  // Page sized to receipt aspect ratio so nothing is clipped or over-shrunk
+  const margin = 24;
   const pageW = 595;
-  const pageH = 842;
-  const margin = 28;
   const imgW = pageW - margin * 2;
   const imgH = (canvas.height / canvas.width) * imgW;
+  const pageH = Math.ceil(imgH + margin * 2);
   const imgX = margin;
-  const imgY = Math.max(margin, (pageH - imgH) / 2);
+  const imgY = margin;
   const content = `q\n${imgW.toFixed(2)} 0 0 ${imgH.toFixed(2)} ${imgX.toFixed(2)} ${(pageH - imgY - imgH).toFixed(2)} cm\n/Im0 Do\nQ\n`;
 
   const encoder = new TextEncoder();
@@ -509,7 +621,13 @@ export async function shareTransferReceiptImage(
     await navigator.share({
       files: [file],
       title: 'Xtrapay Receipt',
-      text: `Transfer of ${money(transfer.amount)} to ${transfer.recipientName}`,
+      text: [
+        `Transfer of ${money(transfer.amount)} to ${transfer.recipientName}`,
+        `Ref ${transfer.reference}`,
+        transfer.sessionId ? `Session ${transfer.sessionId}` : '',
+      ]
+        .filter(Boolean)
+        .join(' · '),
     });
     return 'shared' as const;
   }

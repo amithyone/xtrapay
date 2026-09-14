@@ -83,6 +83,8 @@ export interface Transaction {
   status: 'Successful' | 'Settled' | 'Automated' | 'Delivered' | 'Processing' | 'SUCCESS' | string;
   category: 'transfer' | 'utility' | 'bill' | 'savings' | 'card' | 'p2p';
   reference: string;
+  /** Processor / CheckoutNow / NIBSS session id when available */
+  sessionId?: string;
   token?: string; // e.g. "4590-2391-4920-1182" for electricity
   bank?: string;
   recipient?: string;

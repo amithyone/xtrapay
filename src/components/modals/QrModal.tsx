@@ -1,16 +1,132 @@
-import React from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useTransactions } from '../../context/TransactionContext';
+import { ApiError, getApiBase } from '../../lib/api';
+import { apiWalletQr, type AppWalletQr } from '../../lib/xtrapayApi';
 import { Icon } from '../Icon';
 
+function payloadQrFallback(payload: string): string | null {
+  const p = payload.trim();
+  if (!p) return null;
+  // Public QR encode as last resort when server image fails
+  return `https://api.qrserver.com/v1/create-qr-code/?size=240x240&margin=8&data=${encodeURIComponent(p)}`;
+}
+
 export const QrModal: React.FC = () => {
-  const { isQrOpen, setIsQrOpen, selectedWallet, accountFullName, showToast } = useTransactions();
+  const {
+    isQrOpen,
+    setIsQrOpen,
+    selectedWallet,
+    accountFullName,
+    showToast,
+  } = useTransactions();
+
+  const [loading, setLoading] = useState(false);
+  const [qr, setQr] = useState<AppWalletQr | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  /** 0 = imageUrl, 1 = imageBase64, 2 = payload encode fallback */
+  const [srcIndex, setSrcIndex] = useState(0);
+
+  useEffect(() => {
+    if (!isQrOpen) {
+      setQr(null);
+      setError(null);
+      setSrcIndex(0);
+      return;
+    }
+
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    setSrcIndex(0);
+    (async () => {
+      try {
+        const data = await apiWalletQr(selectedWallet.id);
+        if (!cancelled) setQr(data);
+      } catch (err) {
+        if (!cancelled) {
+          setQr(null);
+          setError(
+            err instanceof ApiError
+              ? err.message
+              : 'Could not load receive QR from the server.'
+          );
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isQrOpen, selectedWallet.id]);
+
+  const candidates = useMemo(() => {
+    if (!qr) return [] as string[];
+    const list: string[] = [];
+    if (qr.imageUrl) list.push(qr.imageUrl);
+    if (qr.imageBase64) list.push(qr.imageBase64);
+    const encoded = payloadQrFallback(qr.payload);
+    if (encoded) list.push(encoded);
+    return list;
+  }, [qr]);
+
+  const imageSrc = candidates[srcIndex] ?? null;
 
   if (!isQrOpen) return null;
 
   const acct = {
-    name: selectedWallet.accountName || accountFullName || selectedWallet.name,
-    number: selectedWallet.accountNumber,
-    bank: selectedWallet.bankName,
+    name:
+      qr?.accountName ||
+      selectedWallet.accountName ||
+      accountFullName ||
+      selectedWallet.name,
+    number: qr?.accountNumber || selectedWallet.accountNumber || '—',
+    bank: qr?.bankName || selectedWallet.bankName || '—',
+  };
+
+  const payload = qr?.payload || '';
+
+  const copyPayload = () => {
+    if (!payload) {
+      showToast('QR unavailable', 'Wait for the server QR payload.', 'warning');
+      return;
+    }
+    if (navigator.clipboard) {
+      void navigator.clipboard.writeText(payload);
+    }
+    showToast('QR link copied', payload.startsWith('http') ? payload : 'Payload copied.', 'success');
+  };
+
+  const saveImage = async () => {
+    if (!imageSrc) {
+      showToast('No image yet', 'QR image is still loading from the server.', 'info');
+      return;
+    }
+    try {
+      if (imageSrc.startsWith('data:')) {
+        const a = document.createElement('a');
+        a.href = imageSrc;
+        a.download = `xtrapay-qr-${acct.number || 'wallet'}.svg`;
+        a.click();
+        showToast('QR saved', 'Receive QR downloaded.', 'success');
+        setIsQrOpen(false);
+        return;
+      }
+      const res = await fetch(imageSrc, { mode: 'cors' });
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `xtrapay-qr-${acct.number || 'wallet'}.svg`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast('QR saved', 'Receive QR downloaded.', 'success');
+      setIsQrOpen(false);
+    } catch {
+      window.open(imageSrc, '_blank', 'noopener,noreferrer');
+      showToast('QR opened', 'Save the image from the opened tab.', 'info');
+    }
   };
 
   return (
@@ -19,7 +135,7 @@ export const QrModal: React.FC = () => {
         <div className="flex justify-between items-center pb-2 border-b border-[var(--glass-border)]">
           <div className="flex items-center gap-1.5">
             <Icon name="qr_code_2" size={18} className="text-[var(--accent)]" />
-            <span className="text-xs font-semibold text-[var(--text)]">Instant NIBSS QR</span>
+            <span className="text-xs font-semibold text-[var(--text)]">Receive QR</span>
           </div>
           <button
             onClick={() => setIsQrOpen(false)}
@@ -31,41 +147,34 @@ export const QrModal: React.FC = () => {
           </button>
         </div>
 
-        <div className="bg-white p-4 rounded-2xl inline-block mx-auto shadow-inner">
-          <svg
-            className="w-48 h-48"
-            viewBox="0 0 100 100"
-            fill="none"
-            xmlns="http://www.w3.org/2000/svg"
-          >
-            <rect x="10" y="10" width="24" height="24" fill="#000" />
-            <rect x="14" y="14" width="16" height="16" fill="#fff" />
-            <rect x="18" y="18" width="8" height="8" fill="#000" />
-            <rect x="66" y="10" width="24" height="24" fill="#000" />
-            <rect x="70" y="14" width="16" height="16" fill="#fff" />
-            <rect x="74" y="18" width="8" height="8" fill="#000" />
-            <rect x="10" y="66" width="24" height="24" fill="#000" />
-            <rect x="14" y="70" width="16" height="16" fill="#fff" />
-            <rect x="18" y="74" width="8" height="8" fill="#000" />
-            <rect x="40" y="12" width="6" height="6" fill="#000" />
-            <rect x="50" y="12" width="6" height="6" fill="#000" />
-            <rect x="44" y="24" width="6" height="6" fill="#000" />
-            <rect x="54" y="24" width="6" height="6" fill="#000" />
-            <rect x="12" y="44" width="6" height="6" fill="#000" />
-            <rect x="24" y="44" width="6" height="6" fill="#000" />
-            <rect x="36" y="38" width="6" height="6" fill="#000" />
-            <rect x="46" y="42" width="8" height="8" fill="#dc2626" />
-            <rect x="60" y="44" width="6" height="6" fill="#000" />
-            <rect x="72" y="44" width="6" height="6" fill="#000" />
-            <rect x="82" y="44" width="6" height="6" fill="#000" />
-            <rect x="40" y="60" width="6" height="6" fill="#000" />
-            <rect x="52" y="66" width="6" height="6" fill="#000" />
-            <rect x="64" y="60" width="6" height="6" fill="#000" />
-            <rect x="76" y="70" width="6" height="6" fill="#000" />
-            <rect x="44" y="80" width="6" height="6" fill="#000" />
-            <rect x="60" y="80" width="6" height="6" fill="#000" />
-            <rect x="80" y="82" width="6" height="6" fill="#000" />
-          </svg>
+        <div className="bg-white p-4 rounded-2xl inline-flex mx-auto shadow-inner min-h-[12rem] min-w-[12rem] items-center justify-center overflow-hidden">
+          {loading ? (
+            <div className="flex flex-col items-center gap-2 text-[var(--muted)]">
+              <Icon name="sync" size={22} className="animate-spin text-[var(--accent)]" />
+              <p className="text-[11px]">Generating QR…</p>
+            </div>
+          ) : imageSrc ? (
+            <img
+              key={imageSrc}
+              src={imageSrc}
+              alt="Receive QR"
+              className="w-48 h-48 object-contain"
+              onError={() => {
+                setSrcIndex(i => {
+                  if (i + 1 < candidates.length) return i + 1;
+                  return i;
+                });
+              }}
+            />
+          ) : (
+            <div className="px-3 py-6 space-y-2 max-w-[12rem]">
+              <Icon name="qr_code_2" size={28} className="mx-auto text-zinc-400" />
+              <p className="text-[11px] text-zinc-500 leading-snug">
+                {error ||
+                  `QR image missing. API: ${getApiBase()}/wallets/{id}/qr — need imageUrl or imageBase64.`}
+              </p>
+            </div>
+          )}
         </div>
 
         <div>
@@ -74,31 +183,26 @@ export const QrModal: React.FC = () => {
             {acct.number} · {acct.bank}
           </p>
           <p className="text-[11px] text-[var(--muted)] mt-1">
-            Compatible with Nigerian banking apps &amp; POS
+            Scan to pay into this wallet
           </p>
+          {qr?.expiresAt && (
+            <p className="text-[10px] text-[var(--muted)] mt-1">Expires {qr.expiresAt}</p>
+          )}
         </div>
 
         <div className="grid grid-cols-2 gap-2.5 pt-1">
           <button
-            onClick={() => {
-              if (navigator.clipboard) {
-                navigator.clipboard.writeText(
-                  `00020101021226580010com.nibss0110${acct.number}520454115802NG5916${acct.name}6005Lagos`
-                );
-              }
-              showToast('QR Payload Copied', 'EMVCo payload string copied.');
-            }}
-            className="h-11 rounded-2xl glass-chip !rounded-2xl text-[var(--text)] text-xs font-semibold"
+            onClick={copyPayload}
+            disabled={!payload}
+            className="h-11 rounded-2xl glass-chip !rounded-2xl text-[var(--text)] text-xs font-semibold disabled:opacity-40"
             type="button"
           >
-            Copy payload
+            Copy link
           </button>
           <button
-            onClick={() => {
-              showToast('QR Saved', 'QR image downloaded to photos.');
-              setIsQrOpen(false);
-            }}
-            className="h-11 rounded-2xl bg-[var(--accent)] text-white text-xs font-semibold"
+            onClick={() => void saveImage()}
+            disabled={!imageSrc}
+            className="h-11 rounded-2xl bg-[var(--accent)] text-white text-xs font-semibold disabled:opacity-40"
             type="button"
           >
             Save to device

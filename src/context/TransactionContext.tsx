@@ -57,6 +57,7 @@ import {
   apiStrictAutosave,
   apiSubmitKyc,
   apiTransactions,
+  normalizeTransaction,
   apiUpdateMe,
   apiVerifyPin,
   apiWallets,
@@ -68,6 +69,49 @@ import {
   type AppNotification,
   type UserProfile,
 } from '../lib/xtrapayApi';
+
+const SESSION_CACHE_KEY = 'xtrapay_session_cache';
+
+type SessionCache = {
+  wallets: WalletAccount[];
+  selectedWalletId: string;
+  accountFullName: string;
+  personalBalance: number;
+  businessBalance: number;
+  flexibleSavings: number;
+  strictSavings: number;
+  accountTier: string;
+  transactions?: Transaction[];
+};
+
+function readSessionCache(): SessionCache | null {
+  try {
+    if (!getAccessToken()) return null;
+    const raw = localStorage.getItem(SESSION_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as SessionCache;
+    if (!parsed || !Array.isArray(parsed.wallets)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeSessionCache(snapshot: SessionCache) {
+  try {
+    localStorage.setItem(SESSION_CACHE_KEY, JSON.stringify(snapshot));
+  } catch {
+    // ignore quota / private mode
+  }
+}
+
+function clearSessionCache() {
+  try {
+    localStorage.removeItem(SESSION_CACHE_KEY);
+  } catch {
+    // ignore
+  }
+}
 
 const BENEFICIARY_COLORS = [
   'text-[#c0c1ff]',
@@ -195,7 +239,10 @@ interface TransactionContextType {
 
   // Auth
   isAuthenticated: boolean;
+  /** True once UI may render (never blocks on bootstrap). */
   authReady: boolean;
+  /** Silent background bootstrap / balance refresh in progress. */
+  isSyncing: boolean;
   hasSeenIntro: boolean;
   completeIntro: () => void;
   login: () => void;
@@ -407,16 +454,29 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
   };
 
   // Balances
-  // Account
+  // Account — hydrate from last successful session so refresh is never a blank "Connecting…" gate
+  const sessionCache = React.useMemo(() => readSessionCache(), []);
   const [accountContext, setAccountContextState] = useState<AccountContext>('personal');
-  const [wallets, setWallets] = useState<WalletAccount[]>(PLACEHOLDER_WALLETS);
+  const [wallets, setWallets] = useState<WalletAccount[]>(
+    () => (sessionCache?.wallets?.length ? sessionCache.wallets : PLACEHOLDER_WALLETS)
+  );
   const [banks, setBanks] = useState<ApiBank[]>([]);
   const [banksLoading, setBanksLoading] = useState(false);
-  const [selectedWalletId, setSelectedWalletId] = useState<string>('personal');
-  const [personalBalance, setPersonalBalance] = useState<number>(0);
-  const [businessBalance, setBusinessBalance] = useState<number>(14250000.00);
-  const [flexibleSavings, setFlexibleSavings] = useState<number>(0);
-  const [strictSavings, setStrictSavings] = useState<number>(0);
+  const [selectedWalletId, setSelectedWalletId] = useState<string>(
+    () => sessionCache?.selectedWalletId || 'personal'
+  );
+  const [personalBalance, setPersonalBalance] = useState<number>(
+    () => sessionCache?.personalBalance ?? 0
+  );
+  const [businessBalance, setBusinessBalance] = useState<number>(
+    () => sessionCache?.businessBalance ?? 0
+  );
+  const [flexibleSavings, setFlexibleSavings] = useState<number>(
+    () => sessionCache?.flexibleSavings ?? 0
+  );
+  const [strictSavings, setStrictSavings] = useState<number>(
+    () => sessionCache?.strictSavings ?? 0
+  );
   const [savingsPlans, setSavingsPlans] = useState<SavingsPlan[]>([]);
   const [savingsMeta, setSavingsMeta] = useState({
     blendedApy: 0,
@@ -435,9 +495,13 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
   const [biometricsActive, setBiometricsActive] = useState<boolean>(true);
   const [strictAutoSave, setStrictAutoSave] = useState<boolean>(false);
   const [balanceHidden, setBalanceHidden] = useState<boolean>(false);
-  const [accountTier, setAccountTier] = useState<string>('Tier 1');
+  const [accountTier, setAccountTier] = useState<string>(
+    () => sessionCache?.accountTier || 'Tier 1'
+  );
   const [kycStatus, setKycStatus] = useState<string>('none');
-  const [accountFullName, setAccountFullName] = useState<string>('');
+  const [accountFullName, setAccountFullName] = useState<string>(
+    () => sessionCache?.accountFullName || ''
+  );
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [appBranding, setAppBranding] = useState<AppBranding>(() =>
     mapApiBranding(null)
@@ -470,7 +534,9 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
     }
   });
   const [posManagementUnlocked, setPosManagementUnlocked] = useState(false);
-  const [authReady, setAuthReady] = useState<boolean>(() => !getAccessToken());
+  /** Never block the shell on network — cached/placeholder UI shows immediately. */
+  const [authReady] = useState(true);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [hasSeenIntro, setHasSeenIntro] = useState<boolean>(() => {
     try {
       return localStorage.getItem('xtrapay_intro') === '1';
@@ -478,7 +544,6 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
       return false;
     }
   });
-
   const completeIntro = () => {
     setHasSeenIntro(true);
     try {
@@ -506,6 +571,7 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
     if (business) setBusinessBalance(business.balance);
   };
 
+  /** Silent — does not drive the Hub "Updating" chip. */
   const refreshBalances = async () => {
     try {
       const list = await apiWallets();
@@ -548,18 +614,28 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
     );
     setOverdraftLimit(data.overdraftLimit);
     setCardFrozen(data.cardFrozen);
+    let profileName = '';
     if (data.user) {
-      applyUserProfile(mapApiUserProfile(data.user));
+      const profile = mapApiUserProfile(data.user);
+      applyUserProfile(profile);
+      profileName = profile.fullName || '';
     }
     // Prefer full ledger; fall back to bootstrap recent slice.
+    let nextTxs: Transaction[] = [];
     try {
       const ledger = await apiTransactions({ limit: 100 });
-      setTransactions(Array.isArray(ledger) && ledger.length ? ledger : data.recentTransactions ?? []);
+      nextTxs =
+        Array.isArray(ledger) && ledger.length
+          ? ledger
+          : (data.recentTransactions ?? []).map(t =>
+              normalizeTransaction(t as Parameters<typeof normalizeTransaction>[0])
+            );
     } catch {
-      setTransactions(
-        Array.isArray(data.recentTransactions) ? data.recentTransactions : []
+      nextTxs = (data.recentTransactions ?? []).map(t =>
+        normalizeTransaction(t as Parameters<typeof normalizeTransaction>[0])
       );
     }
+    setTransactions(nextTxs);
     setBanksLoading(true);
     try {
       const [list, bens] = await Promise.all([apiBanks(), apiBeneficiaries().catch(() => [])]);
@@ -596,6 +672,7 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
     try {
       const me = await apiMe();
       applyUserProfile(me);
+      if (me.fullName) profileName = me.fullName;
     } catch {
       // bootstrap user is enough until Profile refresh
     }
@@ -605,6 +682,20 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
     } catch {
       // keep bootstrap savings balances
     }
+
+    const personal = walletList.find(w => w.kind === 'personal');
+    const business = walletList.find(w => w.kind === 'business');
+    writeSessionCache({
+      wallets: walletList,
+      selectedWalletId: selected,
+      accountFullName: profileName,
+      personalBalance: personal?.balance ?? 0,
+      businessBalance: business?.balance ?? 0,
+      flexibleSavings: Number(data.savings.flexibleBalance ?? 0),
+      strictSavings: Number(data.savings.strictBalance ?? 0),
+      accountTier: data.user ? mapApiUserProfile(data.user).tier || 'Tier 1' : 'Tier 1',
+      transactions: nextTxs.slice(0, 40),
+    });
   };
 
   const refreshProfile = async () => {
@@ -618,15 +709,20 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
 
   const establishSession = async (accessToken: string) => {
     setAccessToken(accessToken);
-    await applyBootstrap();
-    setIsAuthenticated(true);
-    setPosManagementUnlocked(false);
-    setActiveScreenState('hub');
-    setScreenHistory(['hub']);
+    setIsSyncing(true);
     try {
-      localStorage.setItem('xtrapay_auth', '1');
-    } catch {
-      // ignore
+      await applyBootstrap();
+      setIsAuthenticated(true);
+      setPosManagementUnlocked(false);
+      setActiveScreenState('hub');
+      setScreenHistory(['hub']);
+      try {
+        localStorage.setItem('xtrapay_auth', '1');
+      } catch {
+        // ignore
+      }
+    } finally {
+      setIsSyncing(false);
     }
   };
 
@@ -645,6 +741,7 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
   const logout = () => {
     void apiLogout();
     setAccessToken(null);
+    clearSessionCache();
     setIsAuthenticated(false);
     setPosManagementUnlocked(false);
     setUserProfile(null);
@@ -658,6 +755,7 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
     setCumulativeSpent(0);
     setKycPromptDismissed(false);
     setNotifications([]);
+    setIsSyncing(false);
     setUnreadNotificationCount(0);
     seenNotificationIds.current = new Set();
     setActiveScreenState('hub');
@@ -848,28 +946,31 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
   useEffect(() => {
     let cancelled = false;
     const token = getAccessToken();
-    if (!token) {
-      setAuthReady(true);
-      return;
-    }
+    if (!token) return;
+    // Show Hub immediately from cache; refresh from API in the background.
+    setIsAuthenticated(true);
+    setIsSyncing(true);
     (async () => {
       try {
         await applyBootstrap();
-        if (!cancelled) {
-          setIsAuthenticated(true);
+        if (!cancelled) setIsAuthenticated(true);
+      } catch (err) {
+        const unauthorized =
+          err instanceof ApiError && (err.status === 401 || err.status === 403);
+        if (unauthorized) {
+          setAccessToken(null);
+          clearSessionCache();
+          if (!cancelled) setIsAuthenticated(false);
         }
-      } catch {
-        setAccessToken(null);
-        if (!cancelled) {
-          setIsAuthenticated(false);
-        }
+        // Network / 5xx: keep cached shell usable
       } finally {
-        if (!cancelled) setAuthReady(true);
+        if (!cancelled) setIsSyncing(false);
       }
     })();
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot session restore
   }, []);
 
   const selectedWallet =
@@ -892,7 +993,9 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
   };
 
   // Transactions State
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [transactions, setTransactions] = useState<Transaction[]>(
+    () => sessionCache?.transactions ?? []
+  );
   const [beneficiaries, setBeneficiaries] = useState<Beneficiary[]>([]);
 
   const saveBeneficiary = async (payload: {
@@ -1864,6 +1967,7 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
         deleteAccount,
         isAuthenticated,
         authReady,
+        isSyncing,
         hasSeenIntro,
         completeIntro,
         login,

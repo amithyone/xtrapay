@@ -442,8 +442,6 @@ export const PayBillsScreen: React.FC = () => {
         </div>
       </section>
 
-      <RecentVtuBeneficiaries kind={kind} items={recentItems} onSelect={applyRecent} />
-
       <section className="glass-card glass-strong !rounded-[24px] px-5 py-5 space-y-4">
         <p className="text-[13px] font-semibold text-[var(--text)]">Payment details</p>
 
@@ -607,6 +605,8 @@ export const PayBillsScreen: React.FC = () => {
           </>
         )}
       </section>
+
+      <RecentVtuBeneficiaries kind={kind} items={recentItems} onSelect={applyRecent} />
 
       <PinSheetModal
         isOpen={pinOpen}

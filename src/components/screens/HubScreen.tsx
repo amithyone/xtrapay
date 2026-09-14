@@ -29,6 +29,7 @@ export const HubScreen: React.FC = () => {
     refreshBalances,
     showToast,
     theme,
+    isSyncing,
   } = useTransactions();
 
   const isLight = theme === 'light';
@@ -234,7 +235,18 @@ export const HubScreen: React.FC = () => {
       {/* Greeting shell — matches More rail radius + soft depth shadow */}
       <header className="hub-action-shell !rounded-[28px] px-4 py-3.5 flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-[12px] text-[var(--muted)] tracking-wide leading-none">Good evening</p>
+          <p className="text-[12px] text-[var(--muted)] tracking-wide leading-none flex items-center gap-1.5">
+            <span>Good evening</span>
+            {isSyncing && (
+              <span
+                className="inline-flex items-center gap-1 text-[10px] font-medium opacity-80"
+                aria-live="polite"
+              >
+                <Icon name="refresh" size={11} className="animate-spin" />
+                Updating
+              </span>
+            )}
+          </p>
           <h1 className="mt-2 text-[15px] font-semibold text-[var(--text)] tracking-tight">
             {selectedWallet.name}
           </h1>

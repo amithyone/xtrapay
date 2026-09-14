@@ -50,19 +50,8 @@ const USE_LEGACY_BOTTOM_NAV = false;
 const USE_LEGACY_HUB = false;
 
 const AppContent: React.FC = () => {
-  const { activeScreen, toast, theme, dismissToast, isAuthenticated, authReady } =
+  const { activeScreen, toast, theme, dismissToast, isAuthenticated } =
     useTransactions();
-
-  if (!authReady) {
-    return (
-      <div
-        className="min-h-screen flex justify-center items-center bg-[var(--bg-0)]"
-        data-theme={theme === 'light' ? 'light' : 'dark'}
-      >
-        <p className="text-[13px] text-[var(--muted)]">Connecting…</p>
-      </div>
-    );
-  }
 
   const renderScreen = () => {
     switch (activeScreen) {

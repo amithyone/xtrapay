@@ -278,8 +278,6 @@ export const TelcoTopupScreen: React.FC<{ kind: Kind }> = ({ kind }) => {
         </span>
       </section>
 
-      <RecentVtuBeneficiaries kind={recentKind} items={recentItems} onSelect={applyRecent} />
-
       <section className="space-y-3">
         <p className="px-0.5 text-[10px] font-medium uppercase tracking-[0.28em] text-[var(--muted)]">
           Network
@@ -294,10 +292,8 @@ export const TelcoTopupScreen: React.FC<{ kind: Kind }> = ({ kind }) => {
                 key={n.id}
                 type="button"
                 onClick={() => setNetworkId(n.id)}
-                className={`rounded-2xl border px-2 py-3 text-center transition-all active:scale-[0.98] ${
-                  active
-                    ? 'border-[var(--accent)]/50 bg-[var(--accent)]/10'
-                    : 'border-[var(--glass-border)] bg-black/[0.03] dark:bg-white/[0.05]'
+                className={`glass-card glass-strong !rounded-[18px] px-2 py-3 text-center appearance-none cursor-pointer transition-all active:scale-[0.98] ${
+                  active ? 'ring-2 ring-[var(--accent)]/45' : ''
                 }`}
               >
                 <span
@@ -437,6 +433,8 @@ export const TelcoTopupScreen: React.FC<{ kind: Kind }> = ({ kind }) => {
               : 'Select a plan'}
         </button>
       </section>
+
+      <RecentVtuBeneficiaries kind={recentKind} items={recentItems} onSelect={applyRecent} />
 
       <PinSheetModal
         isOpen={pinOpen}

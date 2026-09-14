@@ -217,6 +217,7 @@ Transaction {
   status: string           // Settled | Successful | Processing | Failed | …
   category: 'transfer' | 'utility' | 'bill' | 'savings' | 'card' | 'p2p'
   reference: string
+  sessionId?: string       // processor / CheckoutNow / NIBSS session — show on receipt
   token?: string
   bank?: string
   recipient?: string
@@ -530,10 +531,37 @@ further high-value rails if needed.
 | GET | `/business/accounts` | List business wallets |
 | POST | `/business/accounts` | Tier-2 instant: `{ business_name, cac, address, pin }` — KYC from personal; fresh Mevon VA |
 | GET | `/wallets/:id` | Detail + balance |
+| GET | `/wallets/:id/qr` | **Receive QR** — NIBSS EMVCo payload + image (Hub / Receive) |
+| GET | `/receive/qr` | Alias: `?walletId=` → same as `/wallets/:id/qr` |
 | PATCH | `/wallets/:id` | Rename / purpose (optional) |
 | GET | `/wallets/:id/transactions` | Ledger (`category`, `from`, `to`, cursor) |
-| GET | `/transactions` | Cross-wallet history |
-| GET | `/transactions/:id` | Receipt payload |
+| GET | `/transactions` | Cross-wallet history (include `sessionId` when known) |
+| GET | `/transactions/:id` | Full receipt payload — must include `sessionId` when the rail provides one |
+
+**Session ID on receipts** — include on list rows when known, and always on detail:
+
+```http
+GET /api/v1/xtrapay/transactions/{id}
+```
+
+```json
+{
+  "id": "txn_01H…",
+  "reference": "XTR-SJNXC2OTKP",
+  "sessionId": "SES-9F2A1C88B4",
+  "title": "Transfer to INNOCENT AMITHY SOLOMON",
+  "amount": 500,
+  "type": "debit",
+  "status": "Successful",
+  "category": "transfer",
+  "date": "Today - 14 Sep 2026",
+  "timestamp": "11:46",
+  "fullTime": "11:46:51",
+  "note": "From Personal account"
+}
+```
+
+Aliases: `session_id`, `processor_session_id`, `checkout_session_id`, `nibss_session_id`. App shows **Session ID** on the history receipt (tap to copy) when present.
 | POST | `/transfers` | Bank: `{ walletId, channel:'bank', accountNumber, bankCode, amount, recipientName, narration, pin }`. Wallet: `{ walletId, channel:'wallet', phone, amount, recipientName, narration, pin }` |
 | GET | `/transfers/:id` | Status polling (steps 1–3) |
 | POST | `/transfers/name-enquiry` | Bank NUBAN: `{ accountNumber, bankCode }` → `{ accountName }` |
@@ -543,6 +571,31 @@ further high-value rails if needed.
 | GET | `/beneficiaries` | Saved recipients |
 | POST | `/beneficiaries` | Save (see payload below) |
 | DELETE | `/beneficiaries/:id` | Remove |
+
+**`GET /wallets/:id/qr`** — Hub “Show QR” / Receive. Backend generates the live NIBSS (or provider) QR; do **not** invent a client-side fake pattern.
+
+```http
+GET /api/v1/xtrapay/wallets/personal/qr
+Authorization: Bearer <access_token>
+```
+
+Alias: `GET /api/v1/xtrapay/receive/qr?walletId=personal`
+
+**Response `200`**
+
+```json
+{
+  "payload": "00020101021226580010com.nibss0110…",
+  "imageUrl": "https://cdn.example.com/qr/personal.png",
+  "imageBase64": null,
+  "accountName": "INNOCENT SOLOMON",
+  "accountNumber": "8881759736",
+  "bankName": "Providus Bank",
+  "expiresAt": "2026-09-14T23:59:59Z"
+}
+```
+
+Provide **either** `imageUrl` **or** `imageBase64`. Prefer a **public absolute** `imageUrl` (SVG is fine without Imagick). Relative paths like `/storage/qr/….svg` are accepted — the app resolves them against the API host. `imageBase64` may be raw base64, a `data:` URI, or raw SVG markup. Snake_case aliases: `image_url`, `image_base64`, `account_name`, `account_number`, `bank_name`, `expires_at`, `qr_payload`. Regenerate when the VA changes.
 
 **`POST /beneficiaries`** — app “Save beneficiary” on Transfer after name enquiry.
 
@@ -913,7 +966,7 @@ App also treats titles/bodies containing “credit / top-up / received / deposit
 | Hub | `/wallets`, recent `/transactions`, selected wallet |
 | Pay | Limits snippet, recent transfers |
 | Transfer | Banks, name enquiry, beneficiaries, POST transfer, PIN verify |
-| Receive | Wallet account/QR payload |
+| Receive | Wallet account + `GET /wallets/:id/qr` |
 | History | Paginated transactions |
 | Pay bills | Billers + pay |
 | Saving | Savings summary + mutate |

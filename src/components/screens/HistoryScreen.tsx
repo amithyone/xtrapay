@@ -1,6 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { useTransactions } from '../../context/TransactionContext';
 import { Transaction } from '../../types';
+import { ApiError } from '../../lib/api';
+import { apiTransaction } from '../../lib/xtrapayApi';
 import { Icon } from '../Icon';
 import {
   downloadTransferReceiptImage,
@@ -55,6 +57,25 @@ export const HistoryScreen: React.FC = () => {
   const [activeFilter, setActiveFilter] = useState<string>('All');
   const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
   const [receiptBusy, setReceiptBusy] = useState<'image' | 'pdf' | 'share' | null>(null);
+
+  const openReceipt = async (tx: Transaction) => {
+    setSelectedTx(tx);
+    if (tx.sessionId) return;
+    try {
+      const detail = await apiTransaction(tx.id);
+      setSelectedTx(prev =>
+        prev?.id === tx.id
+          ? {
+              ...prev,
+              ...detail,
+              sessionId: detail.sessionId || prev.sessionId,
+            }
+          : prev
+      );
+    } catch {
+      // List row is enough when detail/session is unavailable
+    }
+  };
 
   const filteredTxs = transactions.filter(tx => {
     const matchesSearch =
@@ -136,7 +157,7 @@ export const HistoryScreen: React.FC = () => {
   const renderTodayRow = (tx: Transaction) => (
     <div
       key={tx.id}
-      onClick={() => setSelectedTx(tx)}
+      onClick={() => void openReceipt(tx)}
       className="p-3.5 hover:bg-black/[0.03] dark:hover:bg-white/[0.04] transition-colors cursor-pointer"
     >
       <div className="flex items-start justify-between gap-3">
@@ -208,7 +229,7 @@ export const HistoryScreen: React.FC = () => {
   const renderYesterdayRow = (tx: Transaction) => (
     <div
       key={tx.id}
-      onClick={() => setSelectedTx(tx)}
+      onClick={() => void openReceipt(tx)}
       className="p-3.5 hover:bg-black/[0.03] dark:hover:bg-white/[0.04] transition-colors cursor-pointer"
     >
       <div className="flex items-start justify-between gap-3">
@@ -254,7 +275,7 @@ export const HistoryScreen: React.FC = () => {
   const renderOtherRow = (tx: Transaction) => (
     <div
       key={tx.id}
-      onClick={() => setSelectedTx(tx)}
+      onClick={() => void openReceipt(tx)}
       className="p-3.5 hover:bg-black/[0.03] dark:hover:bg-white/[0.04] transition-colors cursor-pointer"
     >
       <div className="flex items-center justify-between gap-3">
@@ -435,6 +456,24 @@ export const HistoryScreen: React.FC = () => {
                 <span className="text-[var(--muted)]">Reference</span>
                 <span className="font-mono font-medium text-[var(--accent)]">{selectedTx.reference}</span>
               </div>
+              {selectedTx.sessionId && (
+                <div className="flex justify-between gap-2 items-start">
+                  <span className="text-[var(--muted)] shrink-0">Session ID</span>
+                  <button
+                    type="button"
+                    className="font-mono font-medium text-[var(--text)] text-right break-all appearance-none border-0 bg-transparent p-0 cursor-pointer"
+                    onClick={() => {
+                      if (navigator.clipboard && selectedTx.sessionId) {
+                        void navigator.clipboard.writeText(selectedTx.sessionId);
+                        showToast('Session ID copied', selectedTx.sessionId, 'success');
+                      }
+                    }}
+                    title="Tap to copy"
+                  >
+                    {selectedTx.sessionId}
+                  </button>
+                </div>
+              )}
               <div className="flex justify-between gap-2">
                 <span className="text-[var(--muted)]">Date &amp; time</span>
                 <span className="text-[var(--text)] text-right">

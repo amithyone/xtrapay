@@ -399,6 +399,98 @@ export async function apiWallets() {
   return apiRequest<ApiBootstrap['wallets']>('/wallets');
 }
 
+/** Receive QR for Hub / Receive — pay-code / NIBSS payload + image from backend. */
+export type AppWalletQr = {
+  payload: string;
+  imageUrl: string | null;
+  imageBase64: string | null;
+  accountName: string;
+  accountNumber: string;
+  bankName: string;
+  expiresAt: string | null;
+};
+
+/** Turn relative storage paths into absolute URLs against the API host. */
+export function resolveApiMediaUrl(url: string | null | undefined): string | null {
+  if (url == null) return null;
+  const s = String(url).trim();
+  if (!s) return null;
+  if (/^(https?:|data:|blob:)/i.test(s)) return s;
+  try {
+    const api = new URL(getApiBase());
+    if (s.startsWith('//')) return `${api.protocol}${s}`;
+    if (s.startsWith('/')) return `${api.origin}${s}`;
+    return `${api.origin}/${s.replace(/^\.\//, '')}`;
+  } catch {
+    return s;
+  }
+}
+
+function normalizeQrImageData(raw: unknown): string | null {
+  if (raw == null) return null;
+  let s = String(raw).trim();
+  if (!s) return null;
+  if (s.startsWith('data:')) return s;
+
+  // Raw SVG markup returned as the "image" field
+  if (s.startsWith('<svg') || s.startsWith('<?xml')) {
+    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(s)}`;
+  }
+
+  // Percent-decoded peek for base64 that is SVG (`<svg` → PHN2Zy)
+  const compact = s.replace(/\s+/g, '');
+  const looksSvg =
+    compact.startsWith('PHN2Zy') ||
+    compact.startsWith('PD94bW') || // <?xml
+    /svg\+xml/i.test(s);
+
+  const mime = looksSvg ? 'image/svg+xml' : 'image/png';
+  return `data:${mime};base64,${compact}`;
+}
+
+/**
+ * GET /wallets/:id/qr — preferred.
+ * Fallback: GET /receive/qr?walletId=
+ */
+export async function apiWalletQr(walletId: string): Promise<AppWalletQr> {
+  const map = (raw: Record<string, unknown>): AppWalletQr => {
+    const imageUrl = resolveApiMediaUrl(
+      String(raw.imageUrl ?? raw.image_url ?? raw.qrUrl ?? raw.qr_url ?? '').trim() || null
+    );
+    const imageBase64 = normalizeQrImageData(
+      raw.imageBase64 ?? raw.image_base64 ?? raw.qrImage ?? raw.qr_image ?? raw.svg ?? raw.svgBase64
+    );
+    return {
+      payload: String(
+        raw.payload ?? raw.emv ?? raw.emvco ?? raw.qrPayload ?? raw.qr_payload ?? raw.url ?? ''
+      ),
+      imageUrl,
+      imageBase64,
+      accountName: String(raw.accountName ?? raw.account_name ?? raw.name ?? ''),
+      accountNumber: String(raw.accountNumber ?? raw.account_number ?? raw.nuban ?? ''),
+      bankName: String(raw.bankName ?? raw.bank_name ?? raw.bank ?? ''),
+      expiresAt:
+        raw.expiresAt != null || raw.expires_at != null
+          ? String(raw.expiresAt ?? raw.expires_at)
+          : null,
+    };
+  };
+
+  try {
+    const raw = await apiRequest<Record<string, unknown>>(
+      `/wallets/${encodeURIComponent(walletId)}/qr`
+    );
+    return map(raw);
+  } catch (err) {
+    if (!(err instanceof ApiError) || (err.status !== 404 && err.status !== 405)) {
+      throw err;
+    }
+    const q = new URLSearchParams({ walletId });
+    const raw = await apiRequest<Record<string, unknown>>(`/receive/qr?${q}`);
+    return map(raw);
+  }
+}
+
 export type ApiWallet = ApiBootstrap['wallets'][number] & {
   purpose?: string | null;
   parentWalletId?: string | null;
@@ -956,7 +1048,81 @@ export async function apiTransactions(params?: { category?: string; limit?: numb
   if (params?.category) q.set('category', params.category);
   if (params?.limit) q.set('limit', String(params.limit));
   const suffix = q.toString() ? `?${q}` : '';
-  return apiRequest<Transaction[]>(`/transactions${suffix}`);
+  const data = await apiRequest<
+    Transaction[] | { transactions: Transaction[] } | Record<string, unknown>[]
+  >(`/transactions${suffix}`);
+  const list = Array.isArray(data)
+    ? data
+    : (data as { transactions?: Transaction[] })?.transactions ?? [];
+  return list.map(t => normalizeTransaction(t as Record<string, unknown> | Transaction));
+}
+
+/** GET /transactions/:id — full receipt (sessionId, etc.). */
+export async function apiTransaction(id: string) {
+  const raw = await apiRequest<Record<string, unknown> | Transaction>(
+    `/transactions/${encodeURIComponent(id)}`
+  );
+  return normalizeTransaction(raw);
+}
+
+export function normalizeTransaction(
+  raw: Record<string, unknown> | Transaction
+): Transaction {
+  const r = raw as Record<string, unknown>;
+  const sessionRaw =
+    r.sessionId ??
+    r.session_id ??
+    r.sessionID ??
+    r.processorSessionId ??
+    r.processor_session_id ??
+    r.checkoutSessionId ??
+    r.checkout_session_id ??
+    r.nibssSessionId ??
+    r.nibss_session_id;
+  const base = raw as Transaction;
+  return {
+    ...base,
+    id: String(r.id ?? base.id ?? ''),
+    title: String(r.title ?? base.title ?? 'Transaction'),
+    subtitle: String(r.subtitle ?? base.subtitle ?? ''),
+    date: String(r.date ?? base.date ?? ''),
+    timestamp: String(r.timestamp ?? base.timestamp ?? ''),
+    fullTime: (r.fullTime ?? r.full_time ?? base.fullTime) != null
+      ? String(r.fullTime ?? r.full_time ?? base.fullTime)
+      : undefined,
+    amount: Number(r.amount ?? base.amount ?? 0),
+    type: (String(r.type ?? base.type ?? 'debit').toLowerCase() === 'credit'
+      ? 'credit'
+      : 'debit') as Transaction['type'],
+    status: String(r.status ?? base.status ?? 'Successful'),
+    category: (base.category ||
+      (r.category as Transaction['category']) ||
+      'transfer') as Transaction['category'],
+    reference: String(r.reference ?? base.reference ?? ''),
+    sessionId:
+      sessionRaw != null && String(sessionRaw).trim()
+        ? String(sessionRaw).trim()
+        : base.sessionId,
+    token: (r.token ?? base.token) != null ? String(r.token ?? base.token) : undefined,
+    bank: (r.bank ?? base.bank) != null ? String(r.bank ?? base.bank) : undefined,
+    recipient:
+      (r.recipient ?? base.recipient) != null
+        ? String(r.recipient ?? base.recipient)
+        : undefined,
+    accountNumber:
+      (r.accountNumber ?? r.account_number ?? base.accountNumber) != null
+        ? String(r.accountNumber ?? r.account_number ?? base.accountNumber)
+        : undefined,
+    note: (r.note ?? base.note) != null ? String(r.note ?? base.note) : undefined,
+    cardLast4:
+      (r.cardLast4 ?? r.card_last4 ?? base.cardLast4) != null
+        ? String(r.cardLast4 ?? r.card_last4 ?? base.cardLast4)
+        : undefined,
+    cardUsdAmount:
+      (r.cardUsdAmount ?? r.card_usd_amount ?? base.cardUsdAmount) != null
+        ? String(r.cardUsdAmount ?? r.card_usd_amount ?? base.cardUsdAmount)
+        : undefined,
+  };
 }
 
 /* ── Personal savings vaults ── */
