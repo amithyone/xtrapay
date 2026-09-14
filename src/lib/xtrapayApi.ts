@@ -246,6 +246,9 @@ export type ApiBootstrap = {
     singleTxnCap: number;
     transferCap: number;
     posFloatCap: number;
+    /** Lifetime cumulative debit volume (NGN) — KYC prompted at ≥ 50_000 */
+    cumulativeSpent?: number;
+    cumulative_spent?: number;
   };
   savings: {
     flexibleBalance: number;
@@ -286,7 +289,8 @@ export async function apiRegister(payload: {
 }
 
 export async function apiSubmitKyc(payload: {
-  registrationId: string;
+  /** Only during legacy pre-OTP register KYC — omit when logged in */
+  registrationId?: string;
   idType: 'bvn' | 'nin';
   idNumber: string;
   dateOfBirth: string;
@@ -295,11 +299,34 @@ export async function apiSubmitKyc(payload: {
   city: string;
   state: string;
 }) {
+  // Logged-in deferred KYC (preferred path after Tier-0 register)
+  if (!payload.registrationId) {
+    try {
+      return await apiRequest<ApiUserProfile | { ok?: boolean; user?: ApiUserProfile }>('/kyc', {
+        method: 'POST',
+        body: JSON.stringify({
+          idType: payload.idType,
+          idNumber: payload.idNumber,
+          dateOfBirth: payload.dateOfBirth,
+          gender: payload.gender,
+          address: payload.address,
+          city: payload.city,
+          state: payload.state,
+        }),
+      });
+    } catch (err) {
+      if (!(err instanceof ApiError) || (err.status !== 404 && err.status !== 405)) throw err;
+      // fall through to /auth/kyc without registrationId
+    }
+  }
   return apiRequest('/auth/kyc', {
     method: 'POST',
     body: JSON.stringify(payload),
   });
 }
+
+/** Lifetime debit volume that triggers deferred KYC (₦50,000). */
+export const KYC_CUMULATIVE_THRESHOLD_NGN = 50_000;
 
 export async function apiSendOtp(
   destination: string,
@@ -614,11 +641,13 @@ export type ApiLimitsPayload = {
   singleTxnCap?: number;
   transferCap?: number;
   posFloatCap?: number;
+  cumulativeSpent?: number;
   daily_spend_cap?: number;
   daily_spent?: number;
   single_txn_cap?: number;
   transfer_cap?: number;
   pos_float_cap?: number;
+  cumulative_spent?: number;
 };
 
 export type AppLimits = {
@@ -627,6 +656,7 @@ export type AppLimits = {
   singleTxnCap: number;
   transferCap: number;
   posFloatCap: number;
+  cumulativeSpent: number;
 };
 
 export function mapApiLimits(raw: ApiLimitsPayload): AppLimits {
@@ -636,6 +666,7 @@ export function mapApiLimits(raw: ApiLimitsPayload): AppLimits {
     singleTxnCap: Number(raw.singleTxnCap ?? raw.single_txn_cap ?? 0),
     transferCap: Number(raw.transferCap ?? raw.transfer_cap ?? 0),
     posFloatCap: Number(raw.posFloatCap ?? raw.pos_float_cap ?? 0),
+    cumulativeSpent: Number(raw.cumulativeSpent ?? raw.cumulative_spent ?? 0),
   };
 }
 
@@ -1915,6 +1946,27 @@ export async function apiLogout() {
   } finally {
     setAccessToken(null);
   }
+}
+
+/** Public legal docs — Terms / Privacy (CMS-backed). */
+export async function apiLegalDocument(kind: 'terms' | 'privacy') {
+  const data = await apiRequest<{
+    title?: string;
+    updatedAt?: string;
+    updated_at?: string;
+    sections?: Array<{ heading?: string; title?: string; body?: string; content?: string }>;
+  }>(`/legal/${kind}`);
+  const sections = (data.sections || [])
+    .map(s => ({
+      heading: String(s.heading || s.title || ''),
+      body: String(s.body || s.content || ''),
+    }))
+    .filter(s => s.heading && s.body);
+  return {
+    title: data.title ? String(data.title) : kind === 'terms' ? 'Terms of use' : 'Privacy policy',
+    updatedAt: String(data.updatedAt ?? data.updated_at ?? ''),
+    sections,
+  };
 }
 
 export function mapApiWallets(

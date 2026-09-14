@@ -31,6 +31,7 @@ export const LimitsScreen: React.FC = () => {
     showToast,
     setDailyLimit,
     setDailySpent,
+    setCumulativeSpent,
   } = useTransactions();
   const limitLeft = Math.max(0, dailyLimit - dailySpent);
 
@@ -55,12 +56,13 @@ export const LimitsScreen: React.FC = () => {
       setTransfer(caps.transferCap);
       setDailyLimit(caps.dailySpendCap);
       setDailySpent(caps.dailySpent);
+      setCumulativeSpent(caps.cumulativeSpent);
     } catch {
       setDaily(dailyLimit);
     } finally {
       setLoading(false);
     }
-  }, [dailyLimit, setDailyLimit, setDailySpent]);
+  }, [dailyLimit, setDailyLimit, setDailySpent, setCumulativeSpent]);
 
   useEffect(() => {
     void load();

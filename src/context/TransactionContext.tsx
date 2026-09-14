@@ -50,6 +50,7 @@ import {
   apiSavings,
   apiShopPay,
   apiStrictAutosave,
+  apiSubmitKyc,
   apiTransactions,
   apiUpdateMe,
   apiVerifyPin,
@@ -57,6 +58,7 @@ import {
   mapApiSavingsSummary,
   mapApiUserProfile,
   mapApiWallets,
+  KYC_CUMULATIVE_THRESHOLD_NGN,
   type ApiBank,
   type UserProfile,
 } from '../lib/xtrapayApi';
@@ -150,6 +152,21 @@ interface TransactionContextType {
   dailyLimit: number;
   setDailySpent: (n: number) => void;
   setDailyLimit: (n: number) => void;
+  /** Lifetime debit volume — KYC prompted at ≥ ₦50,000 */
+  cumulativeSpent: number;
+  setCumulativeSpent: (n: number) => void;
+  /** True when KYC incomplete and cumulative spend ≥ threshold */
+  kycPromptRequired: boolean;
+  dismissKycPrompt: () => void;
+  submitDeferredKyc: (payload: {
+    idType: 'bvn' | 'nin';
+    idNumber: string;
+    dateOfBirth: string;
+    gender: 'male' | 'female';
+    address: string;
+    city: string;
+    state: string;
+  }) => Promise<boolean>;
   cardFrozen: boolean;
   setCardFrozen: (frozen: boolean) => void;
   biometricsActive: boolean;
@@ -386,6 +403,8 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
   });
   const [dailySpent, setDailySpent] = useState<number>(0);
   const [dailyLimit, setDailyLimit] = useState<number>(5000000);
+  const [cumulativeSpent, setCumulativeSpent] = useState<number>(0);
+  const [kycPromptDismissed, setKycPromptDismissed] = useState(false);
   
   const [cardFrozen, setCardFrozen] = useState<boolean>(false);
   const [biometricsActive, setBiometricsActive] = useState<boolean>(true);
@@ -495,6 +514,13 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
     });
     setDailySpent(data.limits.dailySpent);
     setDailyLimit(data.limits.dailySpendCap);
+    setCumulativeSpent(
+      Number(
+        data.limits.cumulativeSpent ??
+          data.limits.cumulative_spent ??
+          0
+      )
+    );
     setOverdraftLimit(data.overdraftLimit);
     setCardFrozen(data.cardFrozen);
     if (data.user) {
@@ -604,12 +630,59 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
     setBanks([]);
     setMoneyRequests([]);
     setGroupPots([]);
+    setCumulativeSpent(0);
+    setKycPromptDismissed(false);
     setActiveScreenState('hub');
     setScreenHistory(['hub']);
     try {
       localStorage.removeItem('xtrapay_auth');
     } catch {
       // ignore
+    }
+  };
+
+  const dismissKycPrompt = () => setKycPromptDismissed(true);
+
+  const kycIncomplete =
+    !kycStatus ||
+    ['none', 'incomplete', 'unverified', 'rejected'].includes(kycStatus.toLowerCase());
+
+  const kycPromptRequired =
+    isAuthenticated &&
+    kycIncomplete &&
+    cumulativeSpent >= KYC_CUMULATIVE_THRESHOLD_NGN &&
+    !kycPromptDismissed;
+
+  const submitDeferredKyc = async (payload: {
+    idType: 'bvn' | 'nin';
+    idNumber: string;
+    dateOfBirth: string;
+    gender: 'male' | 'female';
+    address: string;
+    city: string;
+    state: string;
+  }): Promise<boolean> => {
+    try {
+      const res = await apiSubmitKyc(payload);
+      if (res && typeof res === 'object' && 'fullName' in res) {
+        applyUserProfile(mapApiUserProfile(res as Parameters<typeof mapApiUserProfile>[0]));
+      } else if (res && typeof res === 'object' && 'user' in res && (res as { user?: unknown }).user) {
+        applyUserProfile(
+          mapApiUserProfile((res as { user: Parameters<typeof mapApiUserProfile>[0] }).user)
+        );
+      } else {
+        await refreshProfile();
+      }
+      setKycPromptDismissed(true);
+      showToast('KYC submitted', 'Identity verification is in progress.', 'success');
+      return true;
+    } catch (err) {
+      showToast(
+        'KYC failed',
+        err instanceof ApiError ? err.message : 'Could not submit verification.',
+        'warning'
+      );
+      return false;
     }
   };
 
@@ -1596,6 +1669,11 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
         dailyLimit,
         setDailySpent,
         setDailyLimit,
+        cumulativeSpent,
+        setCumulativeSpent,
+        kycPromptRequired,
+        dismissKycPrompt,
+        submitDeferredKyc,
         cardFrozen,
         setCardFrozen,
         biometricsActive,

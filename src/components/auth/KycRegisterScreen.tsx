@@ -61,7 +61,8 @@ const STATES = [
 ];
 
 /**
- * Registration step 2 — identity / KYC (BVN or NIN + personal details).
+ * KYC form — BVN or NIN + personal details.
+ * Used post-login when cumulative spend reaches ₦50,000 (not during registration).
  */
 export const KycRegisterScreen: React.FC<KycRegisterScreenProps> = ({
   onBack,
@@ -119,7 +120,7 @@ export const KycRegisterScreen: React.FC<KycRegisterScreenProps> = ({
     <>
       <AuthShell
         title="Identity verification"
-        subtitle="Step 2 of 2 · Choose BVN or NIN and complete KYC details required by regulation."
+        subtitle="Verify your identity with BVN or NIN. Required after ₦50,000 cumulative activity."
         onBack={onBack}
       >
         <div className="hub-action-shell !rounded-[28px] p-1.5 grid grid-cols-2 gap-1">

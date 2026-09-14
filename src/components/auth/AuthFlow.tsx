@@ -8,24 +8,24 @@ import {
   apiResetPassword,
   apiSendOtp,
   apiSetPin,
-  apiSubmitKyc,
   apiVerifyOtp,
 } from '../../lib/xtrapayApi';
 import { IntroScreen } from './IntroScreen';
 import { LoginScreen } from './LoginScreen';
 import { RegisterScreen, type RegisterBasicPayload } from './RegisterScreen';
-import { KycRegisterScreen, type RegisterKycPayload } from './KycRegisterScreen';
 import { ForgotPasswordScreen } from './ForgotPasswordScreen';
 import { OtpScreen } from './OtpScreen';
 import { ResetPasswordScreen } from './ResetPasswordScreen';
 import { SetPinScreen } from './SetPinScreen';
 import { CheckoutNowScreen } from '../screens/CheckoutNowScreen';
+import { LegalScreen } from '../screens/LegalScreen';
 
 type AuthStep =
   | 'intro'
   | 'login'
   | 'register'
-  | 'register_kyc'
+  | 'terms'
+  | 'privacy'
   | 'forgot'
   | 'otp'
   | 'set_pin'
@@ -41,7 +41,8 @@ function errMessage(err: unknown, fallback: string) {
 }
 
 /**
- * Full auth gate — intro, login, register (basic → KYC → OTP → PIN), forgot, reset.
+ * Auth gate — Intro → Register (basic) → OTP → PIN → session.
+ * KYC is deferred until cumulative spend hits ₦50,000 (prompted in-app after login).
  */
 export const AuthFlow: React.FC = () => {
   const { hasSeenIntro, completeIntro, establishSession, showToast } = useTransactions();
@@ -51,7 +52,6 @@ export const AuthFlow: React.FC = () => {
   const [registrationId, setRegistrationId] = useState<string | null>(null);
   const [resetOtp, setResetOtp] = useState('');
   const [basicDraft, setBasicDraft] = useState<RegisterBasicPayload | null>(null);
-  const [, setKycDraft] = useState<RegisterKycPayload | null>(null);
   const [busy, setBusy] = useState(false);
 
   const goLogin = () => setStep('login');
@@ -67,6 +67,23 @@ export const AuthFlow: React.FC = () => {
     setStep('otp');
   };
 
+  const sendRegisterOtps = async (draft: RegisterBasicPayload) => {
+    const phone = draft.phone.trim();
+    const email = draft.email.trim();
+    const [phoneOtp] = await Promise.all([
+      apiSendOtp(phone, 'register'),
+      apiSendOtp(email, 'register'),
+    ]);
+    openOtp(phone, 'register');
+    showToast(
+      'OTP Sent',
+      phoneOtp.demoCode
+        ? `Codes sent to phone & email. Demo code: ${phoneOtp.demoCode}`
+        : `Verification codes sent to ${phone} and ${email}.`,
+      'info'
+    );
+  };
+
   if (step === 'intro') {
     return <IntroScreen onSkip={finishIntro} onDone={finishIntro} />;
   }
@@ -75,6 +92,8 @@ export const AuthFlow: React.FC = () => {
     return (
       <RegisterScreen
         onBack={goLogin}
+        onOpenTerms={() => setStep('terms')}
+        onOpenPrivacy={() => setStep('privacy')}
         onContinue={async payload => {
           if (busy) return;
           setBusy(true);
@@ -82,7 +101,7 @@ export const AuthFlow: React.FC = () => {
             const { registrationId: id } = await apiRegister(payload);
             setRegistrationId(id);
             setBasicDraft(payload);
-            setStep('register_kyc');
+            await sendRegisterOtps(payload);
           } catch (err) {
             showToast('Registration failed', errMessage(err, 'Could not create account.'), 'warning');
           } finally {
@@ -93,68 +112,12 @@ export const AuthFlow: React.FC = () => {
     );
   }
 
-  if (step === 'register_kyc') {
-    const sendRegisterOtps = async () => {
-      const phone = basicDraft?.phone?.trim();
-      const email = basicDraft?.email?.trim();
-      if (!phone || !email || !registrationId) {
-        setStep('register');
-        showToast(
-          'Missing details',
-          'Phone and email are required so we can send verification codes.',
-          'warning'
-        );
-        return false;
-      }
-      const [phoneOtp] = await Promise.all([
-        apiSendOtp(phone, 'register'),
-        apiSendOtp(email, 'register'),
-      ]);
-      openOtp(phone, 'register');
-      showToast(
-        'OTP Sent',
-        phoneOtp.demoCode
-          ? `Codes sent to phone & email. Demo code: ${phoneOtp.demoCode}`
-          : `Verification codes sent to ${phone} and ${email}.`,
-        'info'
-      );
-      return true;
-    };
+  if (step === 'terms') {
+    return <LegalScreen kind="terms" onBack={() => setStep('register')} />;
+  }
 
-    return (
-      <KycRegisterScreen
-        onBack={() => setStep('register')}
-        onSkip={async () => {
-          if (busy) return;
-          setBusy(true);
-          try {
-            await sendRegisterOtps();
-          } catch (err) {
-            showToast('OTP failed', errMessage(err, 'Could not send verification code.'), 'warning');
-          } finally {
-            setBusy(false);
-          }
-        }}
-        onContinue={async payload => {
-          if (busy) return;
-          setBusy(true);
-          try {
-            if (!registrationId) {
-              setStep('register');
-              showToast('Missing details', 'Start registration again from the beginning.', 'warning');
-              return;
-            }
-            setKycDraft(payload);
-            await apiSubmitKyc({ registrationId, ...payload });
-            await sendRegisterOtps();
-          } catch (err) {
-            showToast('KYC failed', errMessage(err, 'Could not submit KYC.'), 'warning');
-          } finally {
-            setBusy(false);
-          }
-        }}
-      />
-    );
+  if (step === 'privacy') {
+    return <LegalScreen kind="privacy" onBack={() => setStep('register')} />;
   }
 
   if (step === 'forgot') {
@@ -190,10 +153,11 @@ export const AuthFlow: React.FC = () => {
       <OtpScreen
         destination={destination}
         purpose={otpPurpose}
+        verifying={busy}
         onBack={() =>
           setStep(
             otpPurpose === 'register'
-              ? 'register_kyc'
+              ? 'register'
               : otpPurpose === 'reset'
                 ? 'forgot'
                 : 'login'
@@ -201,6 +165,14 @@ export const AuthFlow: React.FC = () => {
         }
         onResend={async () => {
           try {
+            if (otpPurpose === 'register' && basicDraft?.email) {
+              await Promise.all([
+                apiSendOtp(destination, 'register'),
+                apiSendOtp(basicDraft.email.trim(), 'register'),
+              ]);
+              showToast('OTP Resent', `New codes sent to ${destination} and email.`, 'info');
+              return;
+            }
             const otp = await apiSendOtp(destination, otpPurpose);
             showToast(
               'OTP Resent',
@@ -229,7 +201,6 @@ export const AuthFlow: React.FC = () => {
               registrationId: registrationId ?? undefined,
             });
             if (otpPurpose === 'register' || session.user?.pinSet === false) {
-              // Token is stored; finish into hub only after PIN is created.
               setStep('set_pin');
               showToast(
                 'Account verified',

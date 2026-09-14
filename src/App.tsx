@@ -38,6 +38,7 @@ import { ShareModal } from './components/modals/ShareModal';
 import { NearbyPayModal } from './components/modals/NearbyPayModal';
 import { PayAtShopModal } from './components/modals/PayAtShopModal';
 import { ScanToPayModal } from './components/modals/ScanToPayModal';
+import { KycPromptModal } from './components/modals/KycPromptModal';
 import { BackgroundDepthPattern } from './components/BackgroundDepthPattern';
 import { Icon } from './components/Icon';
 
@@ -154,6 +155,7 @@ const AppContent: React.FC = () => {
             <NearbyPayModal />
             <PayAtShopModal />
             <ScanToPayModal />
+            <KycPromptModal />
           </>
         )}
 

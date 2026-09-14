@@ -12,6 +12,8 @@ export type RegisterBasicPayload = {
 interface RegisterScreenProps {
   onBack: () => void;
   onContinue: (payload: RegisterBasicPayload) => void;
+  onOpenTerms: () => void;
+  onOpenPrivacy: () => void;
 }
 
 /** One word only — strips spaces and other whitespace as the user types. */
@@ -22,7 +24,12 @@ const isOneWord = (value: string) => value.length > 0 && !/\s/.test(value);
 /**
  * Registration step 1 — basic account details.
  */
-export const RegisterScreen: React.FC<RegisterScreenProps> = ({ onBack, onContinue }) => {
+export const RegisterScreen: React.FC<RegisterScreenProps> = ({
+  onBack,
+  onContinue,
+  onOpenTerms,
+  onOpenPrivacy,
+}) => {
   const [firstName, setFirstName] = useState('');
   const [middleName, setMiddleName] = useState('');
   const [lastName, setLastName] = useState('');
@@ -68,7 +75,7 @@ export const RegisterScreen: React.FC<RegisterScreenProps> = ({ onBack, onContin
   return (
     <AuthShell
       title="Basic information"
-      subtitle="Step 1 of 2 · Create your login details. Next you’ll verify your identity (KYC)."
+      subtitle="Create your login with name, phone, email and password. We’ll verify with OTP next — KYC comes later when you need higher limits."
       onBack={onBack}
     >
       <input
@@ -150,15 +157,39 @@ export const RegisterScreen: React.FC<RegisterScreenProps> = ({ onBack, onContin
           type="checkbox"
           checked={accepted}
           onChange={e => setAccepted(e.target.checked)}
-          className="mt-0.5 accent-[var(--accent)]"
+          className="mt-0.5 accent-[var(--accent)] shrink-0"
         />
-        <span>I agree to Xtrapay Terms of use and Privacy policy.</span>
+        <span>
+          I agree to Xtrapay{' '}
+          <button
+            type="button"
+            onClick={e => {
+              e.preventDefault();
+              onOpenTerms();
+            }}
+            className="settings-row font-semibold text-[var(--accent)] appearance-none border-0 bg-transparent cursor-pointer p-0 underline-offset-2 hover:underline"
+          >
+            Terms of use
+          </button>{' '}
+          and{' '}
+          <button
+            type="button"
+            onClick={e => {
+              e.preventDefault();
+              onOpenPrivacy();
+            }}
+            className="settings-row font-semibold text-[var(--accent)] appearance-none border-0 bg-transparent cursor-pointer p-0 underline-offset-2 hover:underline"
+          >
+            Privacy policy
+          </button>
+          .
+        </span>
       </label>
 
       {error && <p className="text-[12px] text-rose-500">{error}</p>}
 
       <button type="button" onClick={submit} className="glass-cta w-full !rounded-2xl">
-        Continue to identity
+        Continue
       </button>
     </AuthShell>
   );

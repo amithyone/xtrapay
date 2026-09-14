@@ -467,15 +467,18 @@ ShopTerminal { id, name, terminalId, amount?, merchantCategory, rssi }
 
 ## 4. Auth API
 
-Frontend flow today: Intro (client) → Login / Register(basic) → KYC → OTP → session.
+Frontend flow: Intro → **Register (basic only)** → **OTP** → **PIN** → session.  
+**No KYC during registration.** KYC is prompted in-app after login when
+**cumulative spend ≥ ₦50,000** (`limits.cumulativeSpent`).
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| POST | `/auth/register` | Step 1 basic: `{ fullName, phone, email, password }` → `{ registrationId }` |
-| POST | `/auth/kyc` | Step 2: `{ registrationId, idType, idNumber, dateOfBirth, gender, address, city, state }` |
+| POST | `/auth/register` | Basic: `{ fullName, phone, email, password }` → `{ registrationId }` |
 | POST | `/auth/otp/send` | `{ destination, purpose: register\|login\|reset }` |
-| POST | `/auth/otp/verify` | `{ destination, purpose, code }` → tokens on success |
+| POST | `/auth/otp/verify` | `{ destination, purpose, code, registrationId? }` → tokens |
 | POST | `/auth/login` | `{ identifier, password }` → tokens **or** `{ requiresOtp: true }` |
+| POST | `/kyc` | **Deferred KYC (logged-in):** `{ idType, idNumber, dateOfBirth, gender, address, city, state }` → user/profile |
+| POST | `/auth/kyc` | Optional alias (same body; `registrationId` not required when authenticated) |
 | POST | `/auth/password/forgot` | `{ identifier }` |
 | POST | `/auth/password/reset` | `{ identifier, otp, newPassword }` |
 | POST | `/auth/logout` | Invalidate refresh |
@@ -485,6 +488,12 @@ Frontend flow today: Intro (client) → Login / Register(basic) → KYC → OTP 
 
 **Tokens:** `{ accessToken, refreshToken, expiresIn }`  
 **Client storage today:** `localStorage xtrapay_auth`, `xtrapay_intro` — replace with secure token storage.
+
+**Deferred KYC rule:** include `limits.cumulativeSpent` (lifetime debit NGN) on
+`GET /bootstrap` and `GET /limits`. When `cumulativeSpent >= 50000` and
+`user.kyc.status` is not `verified` / `pending`, the app shows a KYC prompt.
+User may dismiss once per session; backend should still enforce hard blocks on
+further high-value rails if needed.
 
 **PIN (transaction):**
 
@@ -646,13 +655,31 @@ TerminalTx {
 
 ---
 
-## 11. Legal / partner (mostly static)
+## 11. Legal / partner
+
+Public (no auth required). App loads these on Terms / Privacy screens (register checkbox + Settings).
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/legal/terms` | Optional CMS |
-| GET | `/legal/privacy` | Optional CMS |
+| GET | `/legal/terms` | Terms of use CMS document |
+| GET | `/legal/privacy` | Privacy policy CMS document |
 | GET | `/partners/checkoutnow` | Partner blurb (or keep static in app) |
+
+**Response `200`**
+
+```json
+{
+  "title": "Terms of use",
+  "updatedAt": "14 Sep 2026",
+  "sections": [
+    { "heading": "1. Who we are", "body": "Xtrapay is a digital wallet…" },
+    { "heading": "2. Eligibility", "body": "You must be at least 18…" }
+  ]
+}
+```
+
+Aliases accepted: `updated_at`, section `title` / `content` instead of `heading` / `body`.  
+If the endpoint is missing or empty, the app shows a short built-in fallback.
 
 **Product attribution (UI copy):**  
 Xtrapay by **Xtratech Global Solutions** · Powered by **CheckoutNow** (licensed engine; CheckoutNow does not control user funds/data).
@@ -734,7 +761,7 @@ What a logged-in app boot could fetch in one round-trip (optional `GET /bootstra
   },
   "wallets": [ /* WalletAccount[] from GET /wallets */ ],
   "selectedWalletId": "personal",
-  "limits": { "dailySpendCap": 5000000, "dailySpent": 2450000, "singleTxnCap": 1000000, "transferCap": 500000, "posFloatCap": 2000000 },
+  "limits": { "dailySpendCap": 5000000, "dailySpent": 2450000, "singleTxnCap": 1000000, "transferCap": 500000, "posFloatCap": 2000000, "cumulativeSpent": 12500 },
   "savings": { "flexibleBalance": 214558.04, "strictBalance": 2250, "strictAutoSave": true },
   "overdraftLimit": 150000,
   "recentTransactions": [ /* first page */ ],
