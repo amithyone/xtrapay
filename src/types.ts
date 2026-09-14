@@ -128,6 +128,8 @@ export interface ActiveProcessingTransfer {
   accountNumber: string;
   reference: string;
   narration?: string;
+  /** bank = NIP/NIBSS; wallet = internal ledger (no NIP) */
+  channel?: 'bank' | 'wallet';
   initTime: string;
   processedTime: string;
   settledTime: string;

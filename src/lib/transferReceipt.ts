@@ -14,6 +14,7 @@ export type ReceiptData = {
   settledTime: string;
   statusLabel?: string;
   headline?: string;
+  channel?: 'bank' | 'wallet';
 };
 
 export function receiptFromTransfer(transfer: ActiveProcessingTransfer): ReceiptData {
@@ -28,7 +29,8 @@ export function receiptFromTransfer(transfer: ActiveProcessingTransfer): Receipt
     processedTime: transfer.processedTime,
     settledTime: transfer.settledTime,
     statusLabel: 'SETTLED',
-    headline: 'Transfer sent',
+    headline: transfer.channel === 'wallet' ? 'Wallet transfer sent' : 'Transfer sent',
+    channel: transfer.channel || 'bank',
   };
 }
 
@@ -80,6 +82,28 @@ const COLORS = {
 
 function money(n: number) {
   return `₦${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+/** App brand typeface — must match index.html Google Fonts load. */
+const RECEIPT_FONT = 'Comfortaa, sans-serif';
+
+function receiptFont(weight: 400 | 500 | 600 | 700, sizePx: number) {
+  return `${weight} ${sizePx}px ${RECEIPT_FONT}`;
+}
+
+async function ensureReceiptFonts() {
+  if (typeof document === 'undefined' || !document.fonts?.load) return;
+  try {
+    await Promise.all([
+      document.fonts.load('400 16px Comfortaa'),
+      document.fonts.load('500 16px Comfortaa'),
+      document.fonts.load('600 16px Comfortaa'),
+      document.fonts.load('700 28px Comfortaa'),
+      document.fonts.load('700 52px Comfortaa'),
+    ]);
+  } catch {
+    // Canvas will fall back to sans-serif if Comfortaa is unavailable
+  }
 }
 
 function roundRect(
@@ -167,11 +191,11 @@ export function renderTransferReceiptCanvas(
 
   // Brand row
   ctx.fillStyle = c.accent;
-  ctx.font = '700 28px system-ui, -apple-system, sans-serif';
+  ctx.font = receiptFont(700, 28);
   ctx.textAlign = 'left';
   ctx.fillText('Xtrapay', cardX + 40, cardY + 64);
   ctx.fillStyle = c.muted;
-  ctx.font = '600 14px system-ui, -apple-system, sans-serif';
+  ctx.font = receiptFont(600, 14);
   ctx.fillText('Transfer receipt', cardX + 40, cardY + 92);
 
   // E2EE chip
@@ -181,7 +205,7 @@ export function renderTransferReceiptCanvas(
   ctx.strokeStyle = `${c.success}55`;
   ctx.stroke();
   ctx.fillStyle = c.success;
-  ctx.font = '700 12px system-ui, -apple-system, sans-serif';
+  ctx.font = receiptFont(700, 12);
   ctx.textAlign = 'center';
   ctx.fillText('E2EE', cardX + cardW - 85, cardY + 61);
 
@@ -210,24 +234,24 @@ export function renderTransferReceiptCanvas(
 
   // Amount
   ctx.fillStyle = c.text;
-  ctx.font = '700 52px ui-monospace, SFMono-Regular, Menlo, monospace';
+  ctx.font = receiptFont(700, 52);
   ctx.textAlign = 'center';
   ctx.fillText(money(transfer.amount), cx, cardY + 290);
 
   ctx.fillStyle = c.text;
-  ctx.font = '600 28px system-ui, -apple-system, sans-serif';
+  ctx.font = receiptFont(600, 28);
   ctx.fillText(transfer.headline || 'Transfer sent', cx, cardY + 340);
 
   ctx.fillStyle = c.muted;
-  ctx.font = '400 18px system-ui, -apple-system, sans-serif';
+  ctx.font = receiptFont(400, 18);
   ctx.fillText('sent to', cx, cardY + 372);
   ctx.fillStyle = c.text;
-  ctx.font = '600 20px system-ui, -apple-system, sans-serif';
+  ctx.font = receiptFont(600, 20);
   wrapText(ctx, transfer.recipientName, cx, cardY + 402, cardW - 100, 26);
 
   // Ref chip
   const refLabel = `REF  ${transfer.reference}`;
-  ctx.font = '600 16px ui-monospace, SFMono-Regular, Menlo, monospace';
+  ctx.font = receiptFont(600, 16);
   const refW = Math.max(280, ctx.measureText(refLabel).width + 48);
   roundRect(ctx, cx - refW / 2, cardY + 430, refW, 44, 22);
   ctx.fillStyle = theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)';
@@ -251,31 +275,40 @@ export function renderTransferReceiptCanvas(
 
   ctx.textAlign = 'left';
   ctx.fillStyle = c.muted;
-  ctx.font = '500 14px system-ui, -apple-system, sans-serif';
+  ctx.font = receiptFont(500, 14);
   ctx.fillText('Here is how your transfer progressed.', boxX + 24, boxY + 36);
 
   roundRect(ctx, boxX + boxW - 110, boxY + 18, 86, 26, 13);
   ctx.fillStyle = c.successBg;
   ctx.fill();
   ctx.fillStyle = c.success;
-  ctx.font = '700 11px system-ui, -apple-system, sans-serif';
+  ctx.font = receiptFont(700, 11);
   ctx.textAlign = 'center';
   ctx.fillText(transfer.statusLabel || 'SETTLED', boxX + boxW - 67, boxY + 36);
 
   const steps = [
     {
       title: 'Transfer initiated',
-      detail: `Debit of ${money(transfer.amount)} confirmed from Xtrapay Vault`,
+      detail:
+        transfer.channel === 'wallet'
+          ? `Debit of ${money(transfer.amount)} confirmed from your Xtrapay wallet`
+          : `Debit of ${money(transfer.amount)} confirmed from Xtrapay Vault`,
       time: transfer.initTime || '—',
     },
     {
       title: 'Transfer processed',
-      detail: 'Cleared via NIBSS Instant Payment switch',
+      detail:
+        transfer.channel === 'wallet'
+          ? 'Cleared instantly on Xtrapay ledger (no NIP)'
+          : 'Cleared via NIBSS Instant Payment (NIP) switch',
       time: transfer.processedTime || '—',
     },
     {
       title: 'Received by recipient',
-      detail: `Credited to ${transfer.recipientName} · ${transfer.bankName}`,
+      detail:
+        transfer.channel === 'wallet'
+          ? `Credited to ${transfer.recipientName} · Xtrapay Wallet`
+          : `Credited to ${transfer.recipientName} · ${transfer.bankName}`,
       time: transfer.settledTime || '—',
     },
   ];
@@ -305,15 +338,15 @@ export function renderTransferReceiptCanvas(
 
     ctx.textAlign = 'left';
     ctx.fillStyle = c.text;
-    ctx.font = '600 16px system-ui, -apple-system, sans-serif';
+    ctx.font = receiptFont(600, 16);
     ctx.fillText(step.title, boxX + 64, sy + 4);
     ctx.textAlign = 'right';
     ctx.fillStyle = c.muted;
-    ctx.font = '500 13px ui-monospace, SFMono-Regular, Menlo, monospace';
+    ctx.font = receiptFont(500, 13);
     ctx.fillText(step.time, boxX + boxW - 24, sy + 4);
     ctx.textAlign = 'left';
     ctx.fillStyle = c.muted;
-    ctx.font = '400 13px system-ui, -apple-system, sans-serif';
+    ctx.font = receiptFont(400, 13);
     wrapText(ctx, step.detail, boxX + 64, sy + 28, boxW - 110, 18);
     sy += 84;
   });
@@ -328,25 +361,17 @@ export function renderTransferReceiptCanvas(
   let dy = boxY + boxH + 36;
   details.forEach(([k, v]) => {
     ctx.fillStyle = c.muted;
-    ctx.font = '500 14px system-ui, -apple-system, sans-serif';
+    ctx.font = receiptFont(500, 14);
     ctx.textAlign = 'left';
     ctx.fillText(k, boxX, dy);
     ctx.fillStyle = c.text;
-    ctx.font = '600 15px system-ui, -apple-system, sans-serif';
+    ctx.font = receiptFont(600, 15);
     ctx.textAlign = 'right';
     const truncated =
       ctx.measureText(v).width > boxW * 0.55 ? `${v.slice(0, 28)}…` : v;
     ctx.fillText(truncated, boxX + boxW, dy);
     dy += 34;
   });
-
-  // Footer
-  ctx.textAlign = 'center';
-  ctx.fillStyle = c.muted;
-  ctx.font = '600 12px system-ui, -apple-system, sans-serif';
-  ctx.fillText('CBN licensed · NDIC insured · 256-bit', cx, cardY + cardH - 36);
-  ctx.font = '500 11px system-ui, -apple-system, sans-serif';
-  ctx.fillText('Powered by CheckoutNow', cx, cardY + cardH - 16);
 
   return canvas;
 }
@@ -375,6 +400,7 @@ export async function downloadTransferReceiptImage(
   input: ReceiptData | ActiveProcessingTransfer | Transaction,
   theme: ReceiptTheme = 'dark'
 ) {
+  await ensureReceiptFonts();
   const transfer = normalizeReceipt(input);
   const canvas = renderTransferReceiptCanvas(transfer, theme);
   const blob = await new Promise<Blob>((resolve, reject) => {
@@ -389,6 +415,7 @@ export async function downloadTransferReceiptPdf(
   input: ReceiptData | ActiveProcessingTransfer | Transaction,
   theme: ReceiptTheme = 'dark'
 ) {
+  await ensureReceiptFonts();
   const transfer = normalizeReceipt(input);
   const canvas = renderTransferReceiptCanvas(transfer, theme);
   const jpegDataUrl = canvas.toDataURL('image/jpeg', 0.92);
@@ -469,6 +496,7 @@ export async function shareTransferReceiptImage(
   input: ReceiptData | ActiveProcessingTransfer | Transaction,
   theme: ReceiptTheme = 'dark'
 ) {
+  await ensureReceiptFonts();
   const transfer = normalizeReceipt(input);
   const canvas = renderTransferReceiptCanvas(transfer, theme);
   const blob = await new Promise<Blob>((resolve, reject) => {

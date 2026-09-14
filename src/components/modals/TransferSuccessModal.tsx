@@ -216,7 +216,9 @@ export const TransferSuccessModal: React.FC = () => {
                     </time>
                   </div>
                   <p className="text-[11px] text-[var(--muted)]">
-                    Debit of ₦{activeTransfer.amount.toLocaleString()}.00 confirmed from Xtrapay Vault
+                    {activeTransfer.channel === 'wallet'
+                      ? `Debit of ₦${activeTransfer.amount.toLocaleString()}.00 confirmed from your Xtrapay wallet`
+                      : `Debit of ₦${activeTransfer.amount.toLocaleString()}.00 confirmed from Xtrapay Vault`}
                   </p>
                 </div>
               </div>
@@ -239,7 +241,9 @@ export const TransferSuccessModal: React.FC = () => {
                     </time>
                   </div>
                   <p className="text-[11px] text-[var(--muted)]">
-                    Cleared via NIBSS Instant Payment switch
+                    {activeTransfer.channel === 'wallet'
+                      ? 'Cleared instantly on Xtrapay ledger (no NIP)'
+                      : 'Cleared via NIBSS Instant Payment (NIP) switch'}
                   </p>
                 </div>
               </div>
@@ -266,7 +270,10 @@ export const TransferSuccessModal: React.FC = () => {
                     <span className="text-[var(--text)] font-medium">
                       {activeTransfer.recipientName}
                     </span>{' '}
-                    • {activeTransfer.bankName}
+                    •{' '}
+                    {activeTransfer.channel === 'wallet'
+                      ? 'Xtrapay Wallet'
+                      : activeTransfer.bankName}
                   </p>
                 </div>
               </div>
@@ -326,13 +333,6 @@ export const TransferSuccessModal: React.FC = () => {
               Resend
             </button>
           </section>
-
-          <footer className="pt-1 text-center">
-            <div className="inline-flex items-center justify-center gap-1.5 text-[10px] text-[var(--muted)] uppercase font-semibold">
-              <Icon name="shield" size={14} className="text-emerald-500" />
-              <span>CBN licensed · NDIC insured · 256-bit</span>
-            </div>
-          </footer>
         </div>
       </div>
     </div>
