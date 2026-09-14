@@ -24,6 +24,7 @@ import {
   apiAcceptPot,
   apiBanks,
   apiBeneficiaries,
+  apiCreateBeneficiary,
   apiAppConfig,
   apiBootstrap,
   type AppBranding,
@@ -213,6 +214,15 @@ interface TransactionContextType {
   // Real-time Transactions
   transactions: Transaction[];
   beneficiaries: Beneficiary[];
+  /** Persist recipient via POST /beneficiaries and refresh local list */
+  saveBeneficiary: (payload: {
+    name: string;
+    accountNumber?: string;
+    bank?: string;
+    bankCode?: string;
+    phone?: string;
+    channel?: 'bank' | 'wallet';
+  }) => Promise<Beneficiary | null>;
   activeTransfer: ActiveProcessingTransfer | null;
   initiateTransfer: (params: {
     amount: number;
@@ -884,6 +894,33 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
   // Transactions State
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [beneficiaries, setBeneficiaries] = useState<Beneficiary[]>([]);
+
+  const saveBeneficiary = async (payload: {
+    name: string;
+    accountNumber?: string;
+    bank?: string;
+    bankCode?: string;
+    phone?: string;
+    channel?: 'bank' | 'wallet';
+  }): Promise<Beneficiary | null> => {
+    try {
+      const raw = await apiCreateBeneficiary(payload);
+      const mapped = mapApiBeneficiary(raw, beneficiaries.length);
+      setBeneficiaries(prev => {
+        const key = mapped.accountNumber.replace(/\D/g, '');
+        const without = prev.filter(b => b.accountNumber.replace(/\D/g, '') !== key);
+        return [mapped, ...without];
+      });
+      return mapped;
+    } catch (err) {
+      showToast(
+        'Could not save',
+        err instanceof ApiError ? err.message : 'Beneficiary API unavailable.',
+        'warning'
+      );
+      return null;
+    }
+  };
 
   // Peer Money (Ask For Money & Overdraft/Loan) — live from API
   const [moneyRequests, setMoneyRequests] = useState<MoneyRequest[]>([]);
@@ -1841,6 +1878,7 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
         refreshNotifications,
         transactions,
         beneficiaries,
+        saveBeneficiary,
         activeTransfer,
         initiateTransfer,
         dismissActiveTransfer,

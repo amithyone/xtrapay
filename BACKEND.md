@@ -541,8 +541,33 @@ further high-value rails if needed.
 | POST | `/transfers/wallet-enquiry` | Optional alias: `{ phone }` → same shape |
 | GET | `/banks` | NUBAN list |
 | GET | `/beneficiaries` | Saved recipients |
-| POST | `/beneficiaries` | Save |
+| POST | `/beneficiaries` | Save (see payload below) |
 | DELETE | `/beneficiaries/:id` | Remove |
+
+**`POST /beneficiaries`** — app “Save beneficiary” on Transfer after name enquiry.
+
+```json
+{
+  "name": "INNOCENT SOLOMON",
+  "channel": "bank",
+  "accountNumber": "0123456789",
+  "bank": "Access Bank",
+  "bankCode": "044"
+}
+```
+
+Wallet-to-wallet save:
+
+```json
+{
+  "name": "CHIOMA OKORO",
+  "channel": "wallet",
+  "phone": "08031234567",
+  "bank": "Xtrapay Wallet"
+}
+```
+
+Aliases: `account_number`, `bank_code`. Deduplicate on `(accountNumber|phone)+bankCode` (or phone for wallet). Response `201` = `Beneficiary` `{ id, name, initials, bank, accountNumber, tier?, colorClass? }`.
 
 **Resend behaviour (UI):** does **not** call transfer again — opens form with prefill. Backend only needs GET of last transfer details if client doesn’t keep them.
 
@@ -557,10 +582,56 @@ further high-value rails if needed.
 | GET | `/billers/frequent` | User frequents |
 | POST | `/bills/validate` | Meter/smartcard lookup |
 | POST | `/bills/pay` | Pay → `{ reference, token? }` |
+| GET | `/vtu/networks` | Telco list + airtime min/max |
+| GET | `/vtu/data-plans?network_id=` | Data bundles |
+| GET | `/vtu/bill-catalog` | Electricity / TV / betting providers |
+| GET | `/vtu/tv-plans?service_id=` | Cable bouquets |
+| POST | `/vtu/airtime` | `{ network_id, phone, amount, pin }` |
+| POST | `/vtu/data` | `{ network_id, phone, variation_id, expected_price, pin }` |
+| POST | `/vtu/electricity` | `{ service_id, customer_id, variation_id, amount, pin }` |
+| POST | `/vtu/tv` | `{ service_id, customer_id, variation_id, expected_price, pin }` |
+| POST | `/vtu/betting` | `{ service_id, customer_id, amount, pin }` |
+| GET | `/vtu/recent` | **Cross-device recent purchases** (see below) |
 | GET | `/savings` | Flexible + strict balances |
 | POST | `/savings/flexible/deposit` | Quick save |
 | POST | `/savings/flexible/withdraw` | Withdraw |
 | PATCH | `/savings/strict/autosave` | Toggle |
+
+### VTU recent recipients (airtime / data / bills)
+
+Airtime & data do **not** use bank-style `POST /beneficiaries`. Persist recent numbers on the **user account** so a new phone still sees them.
+
+**On every successful** `POST /vtu/airtime|data|electricity|tv|betting`, **upsert** a recent row for that user (dedupe on `kind + providerId + account`).
+
+**List for the app**
+
+```http
+GET /api/v1/xtrapay/vtu/recent?kind=airtime&limit=8
+Authorization: Bearer <access_token>
+```
+
+`kind`: `airtime` | `data` | `electricity` | `cable` | `betting`
+
+**Response `200`**
+
+```json
+{
+  "recent": [
+    {
+      "id": "vtu_rec_01H…",
+      "kind": "airtime",
+      "account": "08031234567",
+      "providerId": "mtn",
+      "providerLabel": "MTN",
+      "label": null,
+      "lastDetail": "₦1,000",
+      "updatedAt": "2026-09-14T12:01:00Z"
+    }
+  ]
+}
+```
+
+Aliases: bare array; `provider_id`, `provider_label`, `last_detail`, `updated_at`; for bills `customer_id` / `phone` / `meter` / `smartcard` as `account`. Keep last ~8 per kind.
 
 ---
 

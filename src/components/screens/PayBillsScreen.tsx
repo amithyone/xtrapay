@@ -14,7 +14,7 @@ import {
   type VtuPlan,
 } from '../../lib/xtrapayApi';
 import {
-  listVtuRecentBeneficiaries,
+  fetchVtuRecentBeneficiaries,
   rememberVtuRecentBeneficiary,
   type VtuRecentBeneficiary,
 } from '../../lib/vtuRecentBeneficiaries';
@@ -58,12 +58,12 @@ export const PayBillsScreen: React.FC = () => {
     detail: string;
     token?: string;
   } | null>(null);
-  const [recentTick, setRecentTick] = useState(0);
+  const [recentItems, setRecentItems] = useState<VtuRecentBeneficiary[]>([]);
 
-  const recentItems = useMemo(
-    () => listVtuRecentBeneficiaries(kind),
-    [kind, recentTick]
-  );
+  const refreshRecent = async () => {
+    const list = await fetchVtuRecentBeneficiaries(kind);
+    setRecentItems(list);
+  };
 
   const applyRecent = (item: VtuRecentBeneficiary) => {
     setServiceId(item.providerId);
@@ -71,6 +71,11 @@ export const PayBillsScreen: React.FC = () => {
     if (item.label) setCustomerName(item.label);
     showToast('Filled from recent', `${item.providerLabel} · ${item.account}`, 'info');
   };
+
+  useEffect(() => {
+    void refreshRecent();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kind]);
 
   useEffect(() => {
     let cancelled = false;
@@ -276,7 +281,7 @@ export const PayBillsScreen: React.FC = () => {
           label: customerName || undefined,
           lastDetail: `₦${amount.toLocaleString()}`,
         });
-        setRecentTick(t => t + 1);
+        void refreshRecent();
         const token = res.token || res.pendingToken || undefined;
         setSuccess({
           title: 'Electricity paid',
@@ -307,7 +312,7 @@ export const PayBillsScreen: React.FC = () => {
           label: customerName || undefined,
           lastDetail: plan.label,
         });
-        setRecentTick(t => t + 1);
+        void refreshRecent();
         setSuccess({
           title: 'TV subscription paid',
           detail: `${plan.label} · ₦${Number(plan.price).toLocaleString()}`,
@@ -331,7 +336,7 @@ export const PayBillsScreen: React.FC = () => {
           label: customerName || undefined,
           lastDetail: `₦${amount.toLocaleString()}`,
         });
-        setRecentTick(t => t + 1);
+        void refreshRecent();
         setSuccess({
           title: 'Betting wallet funded',
           detail: `${serviceLabel} · ₦${amount.toLocaleString()}`,

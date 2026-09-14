@@ -10,7 +10,7 @@ import {
   type VtuPlan,
 } from '../../lib/xtrapayApi';
 import {
-  listVtuRecentBeneficiaries,
+  fetchVtuRecentBeneficiaries,
   rememberVtuRecentBeneficiary,
   type VtuRecentBeneficiary,
 } from '../../lib/vtuRecentBeneficiaries';
@@ -60,19 +60,25 @@ export const TelcoTopupScreen: React.FC<{ kind: Kind }> = ({ kind }) => {
     label: string;
     balance?: number;
   } | null>(null);
-  const [recentTick, setRecentTick] = useState(0);
+  const [recentItems, setRecentItems] = useState<VtuRecentBeneficiary[]>([]);
 
   const recentKind = isAirtime ? 'airtime' : 'data';
-  const recentItems = useMemo(
-    () => listVtuRecentBeneficiaries(recentKind),
-    [recentKind, recentTick]
-  );
+
+  const refreshRecent = async () => {
+    const list = await fetchVtuRecentBeneficiaries(recentKind);
+    setRecentItems(list);
+  };
 
   const applyRecent = (item: VtuRecentBeneficiary) => {
     setNetworkId(item.providerId);
     setPhone(item.account);
     showToast('Filled from recent', `${item.providerLabel} · ${item.account}`, 'info');
   };
+
+  useEffect(() => {
+    void refreshRecent();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recentKind]);
 
   useEffect(() => {
     let cancelled = false;
@@ -210,7 +216,7 @@ export const TelcoTopupScreen: React.FC<{ kind: Kind }> = ({ kind }) => {
           providerLabel: networkLabel,
           lastDetail: `₦${checked.amount.toLocaleString()}`,
         });
-        setRecentTick(t => t + 1);
+        void refreshRecent();
         setSuccess({
           amount: checked.amount,
           label: `${networkLabel} airtime`,
@@ -235,7 +241,7 @@ export const TelcoTopupScreen: React.FC<{ kind: Kind }> = ({ kind }) => {
           providerLabel: networkLabel,
           lastDetail: plan.label,
         });
-        setRecentTick(t => t + 1);
+        void refreshRecent();
         setSuccess({
           amount: Number(plan.price),
           label: plan.label,

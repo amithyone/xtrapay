@@ -1,12 +1,12 @@
 import React, { useEffect, useRef } from 'react';
 import { Icon } from './Icon';
-import { runSwipeHintLoop } from '../lib/swipeHint';
+import { runSwipeHintLoop } from '../../lib/swipeHint';
 import {
   formatVtuRecentAccount,
   vtuRecentInitials,
   type VtuRecentBeneficiary,
   type VtuRecentKind,
-} from '../lib/vtuRecentBeneficiaries';
+} from '../../lib/vtuRecentBeneficiaries';
 
 type Props = {
   kind: VtuRecentKind;

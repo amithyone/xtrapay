@@ -20,6 +20,7 @@ export const TransferScreen: React.FC = () => {
     initiateTransfer,
     setActiveScreen,
     showToast,
+    saveBeneficiary,
     setIsNearbyPayOpen,
     setIsPayAtShopOpen,
     setIsScanToPayOpen,
@@ -40,6 +41,7 @@ export const TransferScreen: React.FC = () => {
   const [bankModalOpen, setBankModalOpen] = useState(false);
   const [bankQuery, setBankQuery] = useState('');
   const [pinOpen, setPinOpen] = useState(false);
+  const [savingBeneficiary, setSavingBeneficiary] = useState(false);
   const nameEnquirySeq = useRef(0);
   /** Skip auto name-enquiry for this acct|bank after one failure until the user changes either value. */
   const failedNameEnquiryKey = useRef<string | null>(null);
@@ -228,7 +230,70 @@ export const TransferScreen: React.FC = () => {
   const money = (n: number) =>
     `₦${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+  const alreadySaved = useMemo(() => {
+    if (!recipientName) return false;
+    if (channel === 'bank') {
+      const acct = accountNumber.replace(/\D/g, '');
+      return beneficiaries.some(
+        b =>
+          b.accountNumber.replace(/\D/g, '') === acct &&
+          b.bank.toLowerCase() === selectedBank.toLowerCase()
+      );
+    }
+    const phone = phoneNumber.replace(/\D/g, '');
+    return beneficiaries.some(b => b.accountNumber.replace(/\D/g, '') === phone);
+  }, [accountNumber, beneficiaries, channel, phoneNumber, recipientName, selectedBank]);
+
+  const handleSaveBeneficiary = async () => {
+    if (!recipientName.trim() || savingBeneficiary) return;
+    if (channel === 'bank') {
+      const acct = accountNumber.replace(/\D/g, '');
+      if (acct.length < 10 || !selectedBank) {
+        showToast('Incomplete', 'Resolve account number and bank first.', 'warning');
+        return;
+      }
+      setSavingBeneficiary(true);
+      const saved = await saveBeneficiary({
+        name: recipientName.trim(),
+        accountNumber: acct,
+        bank: selectedBank,
+        bankCode: selectedBankMeta?.code,
+        channel: 'bank',
+      });
+      setSavingBeneficiary(false);
+      if (saved) {
+        showToast('Beneficiary saved', `${saved.name} · ${saved.bank}`, 'success');
+      }
+      return;
+    }
+    const phone = phoneNumber.replace(/\D/g, '');
+    if (phone.length < 10) {
+      showToast('Incomplete', 'Confirm the wallet phone first.', 'warning');
+      return;
+    }
+    setSavingBeneficiary(true);
+    const saved = await saveBeneficiary({
+      name: recipientName.trim(),
+      phone,
+      accountNumber: phone,
+      bank: 'Xtrapay Wallet',
+      channel: 'wallet',
+    });
+    setSavingBeneficiary(false);
+    if (saved) {
+      showToast('Beneficiary saved', `${saved.name} · Xtrapay Wallet`, 'success');
+    }
+  };
+
   const handleSelectBeneficiary = (ben: Beneficiary) => {
+    if (ben.bank.toLowerCase().includes('xtrapay') || ben.bank.toLowerCase().includes('wallet')) {
+      setChannel('wallet');
+      setPhoneNumber(ben.accountNumber);
+      setRecipientName('');
+      showToast('Beneficiary Selected', `${ben.name} — confirming wallet…`);
+      return;
+    }
+    setChannel('bank');
     setAccountNumber(ben.accountNumber);
     setSelectedBank(ben.bank);
     setRecipientName('');
@@ -537,14 +602,29 @@ export const TransferScreen: React.FC = () => {
         )}
 
         {recipientName && !nameLoading && (
-          <div className="rounded-2xl border border-emerald-500/25 bg-emerald-500/10 px-3.5 py-2.5 flex items-center gap-2">
-            <Icon name="verified" size={16} className="text-emerald-500 shrink-0" />
-            <div className="min-w-0">
-              <p className="text-[10px] uppercase tracking-[0.16em] text-emerald-600/80 dark:text-emerald-400/80">
-                {channel === 'wallet' ? 'Wallet holder' : 'Name enquiry'}
-              </p>
-              <p className="text-[13px] font-semibold text-[var(--text)] truncate">{recipientName}</p>
+          <div className="space-y-2">
+            <div className="rounded-2xl border border-emerald-500/25 bg-emerald-500/10 px-3.5 py-2.5 flex items-center gap-2">
+              <Icon name="verified" size={16} className="text-emerald-500 shrink-0" />
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] uppercase tracking-[0.16em] text-emerald-600/80 dark:text-emerald-400/80">
+                  {channel === 'wallet' ? 'Wallet holder' : 'Name enquiry'}
+                </p>
+                <p className="text-[13px] font-semibold text-[var(--text)] truncate">{recipientName}</p>
+              </div>
             </div>
+            <button
+              type="button"
+              onClick={() => void handleSaveBeneficiary()}
+              disabled={alreadySaved || savingBeneficiary}
+              className="w-full h-11 rounded-2xl border border-[var(--glass-border)] text-[13px] font-semibold flex items-center justify-center gap-2 bg-black/[0.03] dark:bg-white/[0.05] text-[var(--accent)] disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Icon name={alreadySaved ? 'check' : 'person_add'} size={16} />
+              {alreadySaved
+                ? 'Saved beneficiary'
+                : savingBeneficiary
+                  ? 'Saving…'
+                  : 'Save beneficiary'}
+            </button>
           </div>
         )}
 

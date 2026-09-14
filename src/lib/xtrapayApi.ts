@@ -886,13 +886,69 @@ export async function apiBeneficiaries() {
     Array<{
       id: string;
       name: string;
-      initials: string;
+      initials?: string;
       bank: string;
       accountNumber: string;
+      bankCode?: string | null;
+      bank_code?: string | null;
+      phone?: string | null;
+      channel?: string | null;
       tier?: string | null;
       colorClass?: string | null;
     }>
   >('/beneficiaries');
+}
+
+/** POST /beneficiaries — persist a bank or wallet recipient for quick reuse. */
+export async function apiCreateBeneficiary(payload: {
+  name: string;
+  accountNumber?: string;
+  bank?: string;
+  bankCode?: string;
+  phone?: string;
+  channel?: 'bank' | 'wallet';
+}) {
+  const body: Record<string, string> = {
+    name: payload.name.trim(),
+  };
+  if (payload.channel) body.channel = payload.channel;
+  if (payload.accountNumber) {
+    body.accountNumber = payload.accountNumber.replace(/\D/g, '');
+    body.account_number = body.accountNumber;
+  }
+  if (payload.bank) body.bank = payload.bank;
+  if (payload.bankCode) {
+    body.bankCode = payload.bankCode;
+    body.bank_code = payload.bankCode;
+  }
+  if (payload.phone) {
+    const phone = payload.phone.replace(/\s+/g, '');
+    body.phone = phone;
+    if (!body.accountNumber) {
+      body.accountNumber = phone.replace(/\D/g, '');
+      body.account_number = body.accountNumber;
+    }
+  }
+  return apiRequest<{
+    id: string;
+    name: string;
+    initials?: string;
+    bank: string;
+    accountNumber: string;
+    bankCode?: string | null;
+    bank_code?: string | null;
+    phone?: string | null;
+    channel?: string | null;
+    tier?: string | null;
+    colorClass?: string | null;
+  }>('/beneficiaries', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function apiDeleteBeneficiary(id: string) {
+  return apiRequest<{ ok?: boolean }>(`/beneficiaries/${id}`, { method: 'DELETE' });
 }
 
 export async function apiTransactions(params?: { category?: string; limit?: number }) {
@@ -1148,6 +1204,56 @@ export async function apiVtuBillCatalog() {
 export async function apiVtuTvPlans(serviceId: string) {
   const q = new URLSearchParams({ service_id: serviceId });
   return apiRequest<{ plans: VtuPlan[] }>(`/vtu/tv-plans?${q}`);
+}
+
+/**
+ * GET /vtu/recent?kind=airtime|data|electricity|cable|betting&limit=
+ * Server-persisted recent purchases (cross-device). Backend should also upsert
+ * on successful /vtu/airtime|data|electricity|tv|betting.
+ */
+export type ApiVtuRecentItem = {
+  id?: string;
+  kind?: string;
+  type?: string;
+  category?: string;
+  account?: string;
+  phone?: string;
+  customerId?: string;
+  customer_id?: string;
+  meter?: string;
+  smartcard?: string;
+  providerId?: string;
+  provider_id?: string;
+  network_id?: string;
+  service_id?: string;
+  providerLabel?: string;
+  provider_label?: string;
+  provider?: string;
+  network?: string;
+  label?: string;
+  name?: string;
+  customerName?: string;
+  customer_name?: string;
+  lastDetail?: string;
+  last_detail?: string;
+  detail?: string;
+  amount?: number | null;
+  updatedAt?: string | number;
+  updated_at?: string | number;
+  createdAt?: string | number;
+  created_at?: string | number;
+};
+
+export async function apiVtuRecent(params: {
+  kind: 'airtime' | 'data' | 'electricity' | 'cable' | 'betting';
+  limit?: number;
+}) {
+  const q = new URLSearchParams({ kind: params.kind });
+  if (params.limit) q.set('limit', String(params.limit));
+  const data = await apiRequest<
+    ApiVtuRecentItem[] | { recent: ApiVtuRecentItem[]; items?: ApiVtuRecentItem[] }
+  >(`/vtu/recent?${q}`);
+  return Array.isArray(data) ? data : data?.recent ?? data?.items ?? [];
 }
 
 export async function apiVtuAirtime(payload: {

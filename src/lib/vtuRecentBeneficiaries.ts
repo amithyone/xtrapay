@@ -1,4 +1,6 @@
-/** Recently used VTU / bill recipients — local, per-device, for quick repurchase. */
+/** Recently used VTU / bill recipients — server-backed with local cache fallback. */
+
+import { apiVtuRecent, type ApiVtuRecentItem } from './xtrapayApi';
 
 export type VtuRecentKind = 'airtime' | 'data' | 'electricity' | 'cable' | 'betting';
 
@@ -20,7 +22,7 @@ export type VtuRecentBeneficiary = {
 const STORAGE_KEY = 'xtrapay_vtu_recent_beneficiaries';
 const MAX_PER_KIND = 8;
 
-function readAll(): VtuRecentBeneficiary[] {
+function readCache(): VtuRecentBeneficiary[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
@@ -31,7 +33,7 @@ function readAll(): VtuRecentBeneficiary[] {
   }
 }
 
-function writeAll(list: VtuRecentBeneficiary[]) {
+function writeCache(list: VtuRecentBeneficiary[]) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(list.slice(0, 40)));
   } catch {
@@ -47,13 +49,123 @@ function normalizeAccount(kind: VtuRecentKind, account: string): string {
   return trimmed.replace(/\s+/g, '');
 }
 
+function parseUpdatedAt(v: unknown): number {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (typeof v === 'string' && v) {
+    const t = Date.parse(v);
+    if (Number.isFinite(t)) return t;
+  }
+  return Date.now();
+}
+
+export function mapApiVtuRecentItem(
+  raw: ApiVtuRecentItem,
+  fallbackKind: VtuRecentKind
+): VtuRecentBeneficiary | null {
+  const kindRaw = String(raw.kind || raw.type || raw.category || fallbackKind).toLowerCase();
+  const kind: VtuRecentKind =
+    kindRaw === 'data' ||
+    kindRaw === 'electricity' ||
+    kindRaw === 'cable' ||
+    kindRaw === 'tv' ||
+    kindRaw === 'betting'
+      ? kindRaw === 'tv'
+        ? 'cable'
+        : (kindRaw as VtuRecentKind)
+      : fallbackKind;
+
+  const account = normalizeAccount(
+    kind,
+    String(
+      raw.account ??
+        raw.phone ??
+        raw.customerId ??
+        raw.customer_id ??
+        raw.meter ??
+        raw.smartcard ??
+        ''
+    )
+  );
+  if (!account || account.length < 4) return null;
+
+  const providerId = String(
+    raw.providerId ??
+      raw.provider_id ??
+      raw.network_id ??
+      raw.service_id ??
+      ''
+  );
+  const providerLabel = String(
+    raw.providerLabel ??
+      raw.provider_label ??
+      raw.provider ??
+      raw.network ??
+      (providerId || 'Provider')
+  );
+  const label =
+    raw.label || raw.name || raw.customerName || raw.customer_name
+      ? String(raw.label ?? raw.name ?? raw.customerName ?? raw.customer_name)
+      : undefined;
+  const lastDetail =
+    raw.lastDetail || raw.last_detail || raw.detail
+      ? String(raw.lastDetail ?? raw.last_detail ?? raw.detail)
+      : raw.amount != null
+        ? `₦${Number(raw.amount).toLocaleString()}`
+        : undefined;
+
+  return {
+    id: String(raw.id || `${kind}:${providerId}:${account}`),
+    kind,
+    account,
+    providerId,
+    providerLabel,
+    label,
+    lastDetail,
+    updatedAt: parseUpdatedAt(raw.updatedAt ?? raw.updated_at ?? raw.createdAt ?? raw.created_at),
+  };
+}
+
+/** Sync read of cached rows (may be stale). Prefer fetchVtuRecentBeneficiaries. */
 export function listVtuRecentBeneficiaries(kind: VtuRecentKind): VtuRecentBeneficiary[] {
-  return readAll()
+  return readCache()
     .filter(b => b.kind === kind)
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, MAX_PER_KIND);
 }
 
+/**
+ * Load recent VTU recipients from backend (cross-device).
+ * Falls back to local cache if the API is unavailable.
+ */
+export async function fetchVtuRecentBeneficiaries(
+  kind: VtuRecentKind,
+  limit = MAX_PER_KIND
+): Promise<VtuRecentBeneficiary[]> {
+  try {
+    const raw = await apiVtuRecent({ kind, limit });
+    const mapped = raw
+      .map(r => mapApiVtuRecentItem(r, kind))
+      .filter((b): b is VtuRecentBeneficiary => Boolean(b))
+      .filter(b => b.kind === kind)
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, limit);
+
+    if (mapped.length) {
+      const others = readCache().filter(b => b.kind !== kind);
+      writeCache([...mapped, ...others]);
+      return mapped;
+    }
+
+    // Empty server list is authoritative when the call succeeded.
+    const others = readCache().filter(b => b.kind !== kind);
+    writeCache(others);
+    return [];
+  } catch {
+    return listVtuRecentBeneficiaries(kind);
+  }
+}
+
+/** Optimistic local cache until next GET /vtu/recent (backend should upsert on pay). */
 export function rememberVtuRecentBeneficiary(entry: {
   kind: VtuRecentKind;
   account: string;
@@ -77,8 +189,8 @@ export function rememberVtuRecentBeneficiary(entry: {
     updatedAt: Date.now(),
   };
 
-  const others = readAll().filter(b => b.id !== id);
-  writeAll([next, ...others]);
+  const others = readCache().filter(b => b.id !== id);
+  writeCache([next, ...others]);
   return listVtuRecentBeneficiaries(entry.kind);
 }
 
