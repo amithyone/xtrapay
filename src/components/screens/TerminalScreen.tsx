@@ -18,6 +18,7 @@ import {
 } from '../../lib/xtrapayApi';
 import { Icon } from '../Icon';
 import { PinSheetModal } from '../common/PinSheetModal';
+import { SelectFieldButton, SelectSheetModal } from '../common/SelectSheetModal';
 import { SUPPORT_TX_TYPES } from '../../data/terminals';
 import type { Terminal, TerminalStatus, TerminalTx } from '../../types';
 
@@ -93,6 +94,8 @@ export const TerminalScreen: React.FC = () => {
   const [supportType, setSupportType] = useState<string>(SUPPORT_TX_TYPES[0]);
   const [supportNote, setSupportNote] = useState('');
   const [attachTxId, setAttachTxId] = useState<string | null>(null);
+  const [supportTypePickerOpen, setSupportTypePickerOpen] = useState(false);
+  const [attachReceiptPickerOpen, setAttachReceiptPickerOpen] = useState(false);
   const [historyFilter, setHistoryFilter] = useState<'All' | TerminalTx['status']>('All');
   const [allTxs, setAllTxs] = useState<TerminalTx[]>([]);
   const [xPointsSummary, setXPointsSummary] = useState({
@@ -1250,7 +1253,7 @@ export const TerminalScreen: React.FC = () => {
         </div>
       )}
 
-      {sheet === 'support' && (
+      {sheet === 'support' && selected && (
         <div className="app-modal-overlay z-[75] bg-black/70 backdrop-blur-md">
           <div className="app-modal-panel glass-card glass-strong !rounded-[24px] p-5 space-y-4">
             <SheetHeader title="Terminal Support" onClose={closeSheet} />
@@ -1268,41 +1271,26 @@ export const TerminalScreen: React.FC = () => {
                 Serial · <span className="text-[var(--text)]">{selected.serialNumber}</span>
               </p>
             </div>
-            <label className="block space-y-1.5">
-              <span className="text-[10px] uppercase tracking-[0.16em] text-[var(--muted)]">
-                Issue type
-              </span>
-              <select
-                value={supportType}
-                onChange={e => setSupportType(e.target.value)}
-                className={fieldClass}
-              >
-                {SUPPORT_TX_TYPES.map(t => (
-                  <option key={t} value={t}>
-                    {t}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="block space-y-1.5">
-              <span className="text-[10px] uppercase tracking-[0.16em] text-[var(--muted)]">
-                Attach receipt (optional)
-              </span>
-              <select
-                value={attachTxId || ''}
-                onChange={e => setAttachTxId(e.target.value || null)}
-                className={fieldClass}
-              >
-                <option value="">No receipt attached</option>
-                {allTxs.filter(tx => tx.terminalId === selected.terminalId || tx.terminalId === selected.id).map(
-                  tx => (
-                    <option key={tx.id} value={tx.id}>
-                      {tx.reference} · {tx.type} · {money(tx.amount)}
-                    </option>
-                  )
-                )}
-              </select>
-            </label>
+            <SelectFieldButton
+              label="Issue type"
+              valueLabel={supportType}
+              onClick={() => setSupportTypePickerOpen(true)}
+            />
+            <SelectFieldButton
+              label="Attach receipt (optional)"
+              valueLabel={
+                attachTxId
+                  ? (() => {
+                      const tx = allTxs.find(t => t.id === attachTxId);
+                      return tx
+                        ? `${tx.reference} · ${tx.type} · ${money(tx.amount)}`
+                        : 'Receipt selected';
+                    })()
+                  : ''
+              }
+              placeholder="No receipt attached"
+              onClick={() => setAttachReceiptPickerOpen(true)}
+            />
             <textarea
               value={supportNote}
               onChange={e => setSupportNote(e.target.value)}
@@ -1315,6 +1303,46 @@ export const TerminalScreen: React.FC = () => {
           </div>
         </div>
       )}
+
+      <SelectSheetModal
+        open={supportTypePickerOpen}
+        onClose={() => setSupportTypePickerOpen(false)}
+        eyebrow="Terminal support"
+        title="Issue type"
+        options={SUPPORT_TX_TYPES.map(t => ({ value: t, label: t }))}
+        value={supportType}
+        onChange={setSupportType}
+        zClass="z-[95]"
+      />
+
+      <SelectSheetModal
+        open={attachReceiptPickerOpen}
+        onClose={() => setAttachReceiptPickerOpen(false)}
+        eyebrow="Terminal support"
+        title="Attach receipt"
+        subtitle="Optional — link a terminal transaction"
+        options={[
+          { value: '', label: 'No receipt attached', subtitle: 'Skip attachment' },
+          ...(selected
+            ? allTxs
+                .filter(
+                  tx =>
+                    tx.terminalId === selected.terminalId || tx.terminalId === selected.id
+                )
+                .map(tx => ({
+                  value: tx.id,
+                  label: tx.reference,
+                  subtitle: `${tx.type} · ${money(tx.amount)}`,
+                }))
+            : []),
+        ]}
+        value={attachTxId || ''}
+        onChange={v => setAttachTxId(v || null)}
+        searchable
+        searchPlaceholder="Search reference"
+        emptyLabel="No receipts for this terminal"
+        zClass="z-[95]"
+      />
 
       <PinSheetModal
         isOpen={fundPinOpen}

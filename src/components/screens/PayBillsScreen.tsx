@@ -21,6 +21,7 @@ import {
 import { Icon } from '../Icon';
 import { PinSheetModal } from '../common/PinSheetModal';
 import { RecentVtuBeneficiaries } from '../common/RecentVtuBeneficiaries';
+import { SelectFieldButton, SelectSheetModal } from '../common/SelectSheetModal';
 
 type BillKind = 'electricity' | 'cable' | 'betting';
 
@@ -59,6 +60,7 @@ export const PayBillsScreen: React.FC = () => {
     token?: string;
   } | null>(null);
   const [recentItems, setRecentItems] = useState<VtuRecentBeneficiary[]>([]);
+  const [providerPickerOpen, setProviderPickerOpen] = useState(false);
 
   const refreshRecent = async () => {
     const list = await fetchVtuRecentBeneficiaries(kind);
@@ -449,30 +451,13 @@ export const PayBillsScreen: React.FC = () => {
           <p className="text-[12px] text-[var(--muted)] text-center py-6">Loading billers…</p>
         ) : (
           <>
-            <div className="space-y-1.5">
-              <label className="block text-[10px] font-medium uppercase tracking-[0.22em] text-[var(--muted)]">
-                Provider
-              </label>
-              <div className="relative">
-                <select
-                  value={serviceId}
-                  onChange={e => setServiceId(e.target.value)}
-                  className={`${fieldClass} appearance-none pr-10 cursor-pointer`}
-                >
-                  {services.length === 0 && <option value="">No providers</option>}
-                  {services.map(s => (
-                    <option key={s.id} value={s.id}>
-                      {s.label}
-                    </option>
-                  ))}
-                </select>
-                <Icon
-                  name="expand_more"
-                  size={18}
-                  className="text-[var(--muted)] absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none"
-                />
-              </div>
-            </div>
+            <SelectFieldButton
+              label="Provider"
+              valueLabel={serviceLabel}
+              placeholder={services.length === 0 ? 'No providers' : 'Select provider'}
+              disabled={services.length === 0}
+              onClick={() => setProviderPickerOpen(true)}
+            />
 
             {kind === 'electricity' && (
               <div className="grid grid-cols-2 gap-2">
@@ -607,6 +592,30 @@ export const PayBillsScreen: React.FC = () => {
       </section>
 
       <RecentVtuBeneficiaries kind={kind} items={recentItems} onSelect={applyRecent} />
+
+      <SelectSheetModal
+        open={providerPickerOpen}
+        onClose={() => setProviderPickerOpen(false)}
+        eyebrow="Bill payment"
+        title="Select provider"
+        subtitle={
+          kind === 'electricity'
+            ? 'Electricity distribution company'
+            : kind === 'cable'
+              ? 'Cable TV bouquet provider'
+              : 'Betting wallet provider'
+        }
+        options={services.map(s => ({
+          value: s.id,
+          label: s.label,
+          subtitle: s.id,
+        }))}
+        value={serviceId}
+        onChange={setServiceId}
+        searchable={services.length > 6}
+        searchPlaceholder="Search provider"
+        emptyLabel="No providers available"
+      />
 
       <PinSheetModal
         isOpen={pinOpen}

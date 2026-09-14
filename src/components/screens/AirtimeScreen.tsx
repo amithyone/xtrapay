@@ -14,14 +14,21 @@ import {
   rememberVtuRecentBeneficiary,
   type VtuRecentBeneficiary,
 } from '../../lib/vtuRecentBeneficiaries';
+import {
+  getCachedDataPlans,
+  getCachedVtuNetworks,
+  normalizeNetworkId,
+  setCachedDataPlans,
+  setCachedVtuNetworks,
+} from '../../lib/vtuCatalogCache';
 import { Icon } from '../Icon';
 import { PinSheetModal } from '../common/PinSheetModal';
 import { RecentVtuBeneficiaries } from '../common/RecentVtuBeneficiaries';
 
 const FALLBACK_NETWORKS: VtuNetwork[] = [
   { id: 'mtn', label: 'MTN' },
-  { id: 'airtel', label: 'Airtel' },
   { id: 'glo', label: 'Glo' },
+  { id: 'airtel', label: 'Airtel' },
   { id: '9mobile', label: '9mobile' },
 ];
 
@@ -39,17 +46,24 @@ const fieldClass =
 
 type Kind = 'airtime' | 'data';
 
+function sameNetwork(a: string, b: string) {
+  return normalizeNetworkId(a) === normalizeNetworkId(b);
+}
+
 export const TelcoTopupScreen: React.FC<{ kind: Kind }> = ({ kind }) => {
   const { refreshBalances, showToast } = useTransactions();
   const isAirtime = kind === 'airtime';
 
-  const [networks, setNetworks] = useState<VtuNetwork[]>(FALLBACK_NETWORKS);
-  const [airtimeMin, setAirtimeMin] = useState(50);
-  const [airtimeMax, setAirtimeMax] = useState(50000);
+  const cachedNetworks = getCachedVtuNetworks();
+  const [networks, setNetworks] = useState<VtuNetwork[]>(
+    () => cachedNetworks?.networks?.length ? cachedNetworks.networks : FALLBACK_NETWORKS
+  );
+  const [airtimeMin, setAirtimeMin] = useState(() => cachedNetworks?.airtimeMin ?? 50);
+  const [airtimeMax, setAirtimeMax] = useState(() => cachedNetworks?.airtimeMax ?? 50000);
   const [networkId, setNetworkId] = useState('mtn');
   const [phone, setPhone] = useState('');
   const [amountStr, setAmountStr] = useState('1,000');
-  const [plans, setPlans] = useState<VtuPlan[]>([]);
+  const [plans, setPlans] = useState<VtuPlan[]>(() => getCachedDataPlans('mtn') || []);
   const [plansLoading, setPlansLoading] = useState(false);
   const [planSearch, setPlanSearch] = useState('');
   const [variationId, setVariationId] = useState('');
@@ -82,43 +96,71 @@ export const TelcoTopupScreen: React.FC<{ kind: Kind }> = ({ kind }) => {
 
   useEffect(() => {
     let cancelled = false;
+    const cached = getCachedVtuNetworks();
+    if (cached?.networks?.length) {
+      setNetworks(cached.networks);
+      if (cached.airtimeMin != null) setAirtimeMin(cached.airtimeMin);
+      if (cached.airtimeMax != null) setAirtimeMax(cached.airtimeMax);
+    }
     (async () => {
       try {
         const res = await apiVtuNetworks();
         if (cancelled) return;
-        const list = Array.isArray(res.networks) && res.networks.length ? res.networks : FALLBACK_NETWORKS;
+        const list =
+          Array.isArray(res.networks) && res.networks.length ? res.networks : FALLBACK_NETWORKS;
+        const airtime_min =
+          res.airtime_min != null ? Number(res.airtime_min) : undefined;
+        const airtime_max =
+          res.airtime_max != null ? Number(res.airtime_max) : undefined;
         setNetworks(list);
-        if (res.airtime_min != null) setAirtimeMin(Number(res.airtime_min));
-        if (res.airtime_max != null) setAirtimeMax(Number(res.airtime_max));
-        if (!list.some(n => n.id === networkId) && list[0]) {
-          setNetworkId(list[0].id);
-        }
+        if (airtime_min != null) setAirtimeMin(airtime_min);
+        if (airtime_max != null) setAirtimeMax(airtime_max);
+        setCachedVtuNetworks({
+          networks: list,
+          airtimeMin: airtime_min,
+          airtimeMax: airtime_max,
+        });
+        setNetworkId(prev =>
+          list.some(n => sameNetwork(n.id, prev)) ? prev : list[0]?.id || prev
+        );
       } catch {
-        // keep fallback networks
+        // keep fallback / cached networks
       }
     })();
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     if (isAirtime) return;
     let cancelled = false;
-    setPlansLoading(true);
-    setPlans([]);
-    setVariationId('');
+    const cached = getCachedDataPlans(networkId);
+    if (cached?.length) {
+      setPlans(cached);
+      setPlansLoading(false);
+      if (!variationId || !cached.some(p => p.variation_id === variationId)) {
+        setVariationId(cached[0]?.variation_id || '');
+      }
+    } else {
+      setPlansLoading(true);
+      setPlans([]);
+      setVariationId('');
+    }
     setPlanSearch('');
+
     (async () => {
       try {
         const res = await apiVtuDataPlans(networkId);
         if (cancelled) return;
         const list = (res.plans || []).filter(p => p.available !== false);
         setPlans(list);
-        if (list[0]) setVariationId(list[0].variation_id);
+        setCachedDataPlans(networkId, list);
+        setVariationId(prev =>
+          list.some(p => p.variation_id === prev) ? prev : list[0]?.variation_id || ''
+        );
       } catch (err) {
-        if (!cancelled) {
+        if (!cancelled && !cached?.length) {
           showToast(
             'Plans unavailable',
             err instanceof ApiError ? err.message : 'Could not load data plans.',
@@ -132,7 +174,9 @@ export const TelcoTopupScreen: React.FC<{ kind: Kind }> = ({ kind }) => {
     return () => {
       cancelled = true;
     };
-  }, [isAirtime, networkId, showToast]);
+    // Intentionally omit showToast — it is recreated every render and would spam reloads
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAirtime, networkId]);
 
   const filteredPlans = useMemo(() => {
     const q = planSearch.trim().toLowerCase();
@@ -162,7 +206,8 @@ export const TelcoTopupScreen: React.FC<{ kind: Kind }> = ({ kind }) => {
     filteredPlans.find(p => p.variation_id === variationId) ||
     plans.find(p => p.variation_id === variationId) ||
     filteredPlans[0];
-  const networkLabel = networks.find(n => n.id === networkId)?.label || networkId.toUpperCase();
+  const networkLabel =
+    networks.find(n => sameNetwork(n.id, networkId))?.label || networkId.toUpperCase();
 
   const validate = (): { amount: number } | null => {
     const digits = phone.replace(/\D/g, '');
@@ -284,25 +329,37 @@ export const TelcoTopupScreen: React.FC<{ kind: Kind }> = ({ kind }) => {
         </p>
         <div className="grid grid-cols-4 gap-2">
           {networks.map(n => {
-            const active = networkId === n.id;
+            const active = sameNetwork(networkId, n.id);
+            const colorKey = normalizeNetworkId(n.id);
             const color =
-              NETWORK_COLORS[n.id] || 'bg-[var(--accent)]/15 text-[var(--accent)]';
+              NETWORK_COLORS[colorKey] || 'bg-[var(--accent)]/15 text-[var(--accent)]';
             return (
               <button
                 key={n.id}
                 type="button"
                 onClick={() => setNetworkId(n.id)}
-                className={`glass-card glass-strong !rounded-[18px] px-2 py-3 text-center appearance-none cursor-pointer transition-all active:scale-[0.98] ${
-                  active ? 'ring-2 ring-[var(--accent)]/45' : ''
+                aria-pressed={active}
+                className={`network-tile glass-card glass-strong px-2 py-3 text-center appearance-none cursor-pointer ${
+                  active
+                    ? 'network-tile--waterdrop ring-2 ring-[var(--accent)] bg-[var(--accent)]/12 border border-[var(--accent)]/45 shadow-md shadow-[var(--accent)]/20'
+                    : 'network-tile--idle border border-transparent opacity-90'
                 }`}
               >
-                <span
-                  className={`mx-auto flex h-9 w-9 items-center justify-center rounded-full text-[11px] font-bold ${color}`}
-                >
-                  {n.label.slice(0, 1)}
-                </span>
-                <span className="mt-1.5 block text-[11px] font-semibold text-[var(--text)] truncate">
-                  {n.label}
+                <span className="network-tile-inner block">
+                  <span
+                    className={`mx-auto flex h-9 w-9 items-center justify-center rounded-full text-[11px] font-bold ${color}`}
+                  >
+                    {n.label.slice(0, 1)}
+                  </span>
+                  <span
+                    className={`mt-1.5 block text-[11px] truncate ${
+                      active
+                        ? 'font-bold text-[var(--accent)]'
+                        : 'font-semibold text-[var(--text)]'
+                    }`}
+                  >
+                    {n.label}
+                  </span>
                 </span>
               </button>
             );
@@ -376,7 +433,7 @@ export const TelcoTopupScreen: React.FC<{ kind: Kind }> = ({ kind }) => {
                 autoComplete="off"
               />
             </div>
-            {plansLoading ? (
+            {plansLoading && plans.length === 0 ? (
               <p className="text-[12px] text-[var(--muted)] py-4 text-center">Loading plans…</p>
             ) : plans.length === 0 ? (
               <p className="text-[12px] text-[var(--muted)] py-4 text-center">

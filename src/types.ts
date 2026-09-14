@@ -85,6 +85,8 @@ export interface Transaction {
   reference: string;
   /** Processor / CheckoutNow / NIBSS session id when available */
   sessionId?: string;
+  /** bank = NIP/NIBSS; wallet = internal ledger */
+  channel?: 'bank' | 'wallet';
   token?: string; // e.g. "4590-2391-4920-1182" for electricity
   bank?: string;
   recipient?: string;

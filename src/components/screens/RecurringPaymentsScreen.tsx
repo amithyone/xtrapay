@@ -14,6 +14,7 @@ import {
 } from '../../lib/xtrapayApi';
 import { Icon } from '../Icon';
 import { PinSheetModal } from '../common/PinSheetModal';
+import { SelectFieldButton, SelectSheetModal } from '../common/SelectSheetModal';
 
 type ScheduleMode = 'end_of_month' | 'custom';
 type CustomCadence = 'daily' | 'weekly' | 'monthly' | 'every_n_days';
@@ -66,6 +67,7 @@ function nextCustomRunLabel(
 export const RecurringPaymentsScreen: React.FC = () => {
   const { personalBalance, showToast, banks, banksLoading, beneficiaries } = useTransactions();
   const [benPickerOpen, setBenPickerOpen] = useState(false);
+  const [bankPickerOpen, setBankPickerOpen] = useState(false);
   const [view, setView] = useState<ViewMode>('list');
   const nameEnquirySeq = useRef(0);
   const [nameLoading, setNameLoading] = useState(false);
@@ -624,34 +626,18 @@ export const RecurringPaymentsScreen: React.FC = () => {
         </div>
 
         {channel === 'bank' && (
-          <div className="space-y-1.5">
-            <label className="block text-[10px] font-medium uppercase tracking-[0.22em] text-[var(--muted)]">
-              Destination bank
-              {banksLoading
-                ? ' · loading…'
+          <SelectFieldButton
+            label={
+              banksLoading
+                ? 'Destination bank · loading…'
                 : banks.length
-                  ? ` · ${banks.length.toLocaleString()} from backend`
-                  : ''}
-            </label>
-            <div className="relative">
-              <select
-                value={selectedBank}
-                onChange={e => setSelectedBank(e.target.value)}
-                className={`${fieldClass} appearance-none pr-10 cursor-pointer`}
-              >
-                {banks.map(bank => (
-                  <option key={bank.id} value={bank.name}>
-                    {bank.name}
-                  </option>
-                ))}
-              </select>
-              <Icon
-                name="expand_more"
-                size={18}
-                className="text-[var(--muted)] absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none"
-              />
-            </div>
-          </div>
+                  ? `Destination bank · ${banks.length.toLocaleString()} from backend`
+                  : 'Destination bank'
+            }
+            valueLabel={selectedBank}
+            placeholder="Select bank"
+            onClick={() => setBankPickerOpen(true)}
+          />
         )}
 
         {nameLoading && (
@@ -853,6 +839,28 @@ export const RecurringPaymentsScreen: React.FC = () => {
         Schedule recurring transfer
         <Icon name="arrow_forward" size={18} />
       </button>
+
+      <SelectSheetModal
+        open={bankPickerOpen}
+        onClose={() => setBankPickerOpen(false)}
+        eyebrow="Recurring transfer"
+        title="Destination bank"
+        subtitle={
+          banksLoading
+            ? 'Loading banks…'
+            : `${banks.length.toLocaleString()} banks from backend`
+        }
+        options={banks.map(b => ({
+          value: b.name,
+          label: b.name,
+          subtitle: `Code · ${b.code}`,
+        }))}
+        value={selectedBank}
+        onChange={setSelectedBank}
+        searchable
+        searchPlaceholder="Search bank"
+        emptyLabel="No banks found"
+      />
 
       {benPickerOpen && (
         <div

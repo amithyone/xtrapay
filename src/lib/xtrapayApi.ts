@@ -1103,6 +1103,11 @@ export function normalizeTransaction(
       sessionRaw != null && String(sessionRaw).trim()
         ? String(sessionRaw).trim()
         : base.sessionId,
+    channel: (() => {
+      const rawCh = String(r.channel ?? base.channel ?? '').toLowerCase();
+      if (rawCh === 'wallet' || rawCh === 'bank') return rawCh as Transaction['channel'];
+      return base.channel;
+    })(),
     token: (r.token ?? base.token) != null ? String(r.token ?? base.token) : undefined,
     bank: (r.bank ?? base.bank) != null ? String(r.bank ?? base.bank) : undefined,
     recipient:

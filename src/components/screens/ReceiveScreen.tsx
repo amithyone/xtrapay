@@ -55,7 +55,6 @@ export const ReceiveScreen: React.FC = () => {
         number: '—',
         bank: '—',
         tier: accountTier || 'Tier 1',
-        ussd: '—',
         badge: 'Business vault',
         provisioning: false,
       };
@@ -84,16 +83,12 @@ export const ReceiveScreen: React.FC = () => {
       accountFullName.trim() ||
       wallet?.name?.trim() ||
       '—';
-    const ussd =
-      wallet?.ussd?.trim() ||
-      (number ? `*901*000*${number}#` : '');
 
     return {
       name,
       number: number || '—',
       bank: bank || '—',
       tier: accountTier || 'Tier 1',
-      ussd: ussd || '—',
       badge: activeTab === 'personal' ? 'Personal account' : 'Business vault',
       provisioning: !number,
     };
@@ -330,60 +325,19 @@ export const ReceiveScreen: React.FC = () => {
             Share account details
           </button>
 
-          {/* Secondary actions */}
-          <section className="grid grid-cols-2 gap-3">
-            <button
-              type="button"
-              onClick={() => setActiveScreen('ask_money')}
-              className="glass-card glass-strong !rounded-[20px] px-4 py-4 text-left active:scale-[0.99] transition-transform"
-            >
-              <span className="flex h-9 w-9 items-center justify-center rounded-full bg-cyan-500/15 text-cyan-600">
-                <Icon name="payments" size={16} />
-              </span>
-              <span className="mt-3 block text-[13px] font-semibold text-[var(--text)]">
-                Request for money
-              </span>
-              <span className="mt-0.5 block text-[11px] text-[var(--muted)]">Ask people you know</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => copyField(accountInfo.ussd, 'USSD Code')}
-              className="glass-card glass-strong !rounded-[20px] px-4 py-4 text-left active:scale-[0.99] transition-transform"
-            >
-              <span className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-600">
-                <Icon name="dialpad" size={16} />
-              </span>
-              <span className="mt-3 block text-[13px] font-semibold text-[var(--text)]">
-                USSD routing
-              </span>
-              <span className="mt-0.5 block text-[11px] text-[var(--muted)]">Copy dial code</span>
-            </button>
-          </section>
-
-          {/* USSD bar */}
-          <section className="glass-card glass-strong !rounded-[20px] px-4 py-3.5 flex items-center justify-between gap-3">
-            <div className="flex items-center gap-3 min-w-0">
-              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/40 dark:bg-white/8 text-[var(--muted)]">
-                <Icon name="smartphone" size={16} />
-              </span>
-              <div className="min-w-0">
-                <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--muted)]">
-                  Quick USSD
-                </p>
-                <p className="font-mono text-[13px] font-semibold text-[var(--text)] truncate">
-                  {accountInfo.ussd}
-                </p>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => copyField(accountInfo.ussd, 'USSD Dial String')}
-              className="shrink-0 h-9 px-3 rounded-full bg-[var(--accent)] text-white text-[11px] font-semibold active:scale-95"
-            >
-              Dial code
-            </button>
-          </section>
+          <button
+            type="button"
+            onClick={() => setActiveScreen('ask_money')}
+            className="w-full glass-card glass-strong !rounded-[20px] px-4 py-4 text-left active:scale-[0.99] transition-transform"
+          >
+            <span className="flex h-9 w-9 items-center justify-center rounded-full bg-cyan-500/15 text-cyan-600">
+              <Icon name="payments" size={16} />
+            </span>
+            <span className="mt-3 block text-[13px] font-semibold text-[var(--text)]">
+              Request for money
+            </span>
+            <span className="mt-0.5 block text-[11px] text-[var(--muted)]">Ask people you know</span>
+          </button>
         </>
       )}
     </main>

@@ -1,7 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { useTransactions } from '../../context/TransactionContext';
 import { Transaction } from '../../types';
-import { ApiError } from '../../lib/api';
 import { apiTransaction } from '../../lib/xtrapayApi';
 import { Icon } from '../Icon';
 import {
@@ -51,24 +50,56 @@ function yesterdayTxIconTint(tx: Transaction): string {
   return 'text-cyan-600 dark:text-cyan-400';
 }
 
+/** NIP/bank transfers expose session ID; wallet/internal keep reference. */
+function isBankTransfer(tx: Transaction): boolean {
+  if (tx.category !== 'transfer') return false;
+  if (tx.channel === 'wallet') return false;
+  if (tx.channel === 'bank') return true;
+  const bank = (tx.bank || '').trim().toLowerCase();
+  if (!bank) return false;
+  if (bank === 'xtrapay' || bank.includes('wallet')) return false;
+  return true;
+}
+
+function txTrailId(tx: Transaction): { label: string; value: string } {
+  if (isBankTransfer(tx)) {
+    const session = tx.sessionId?.trim();
+    if (session) return { label: 'Session', value: session };
+    return { label: 'Session', value: '—' };
+  }
+  return { label: 'Ref', value: tx.reference || '—' };
+}
+
 export const HistoryScreen: React.FC = () => {
   const { transactions, showToast, theme } = useTransactions();
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [activeFilter, setActiveFilter] = useState<string>('All');
   const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
   const [receiptBusy, setReceiptBusy] = useState<'image' | 'pdf' | 'share' | null>(null);
+  /** Session IDs loaded from detail fetch — keep list rows in sync with receipt. */
+  const [sessionById, setSessionById] = useState<Record<string, string>>({});
+
+  const withSession = (tx: Transaction): Transaction =>
+    sessionById[tx.id] && !tx.sessionId
+      ? { ...tx, sessionId: sessionById[tx.id] }
+      : tx;
 
   const openReceipt = async (tx: Transaction) => {
-    setSelectedTx(tx);
-    if (tx.sessionId) return;
+    const base = withSession(tx);
+    setSelectedTx(base);
+    if (base.sessionId) return;
     try {
       const detail = await apiTransaction(tx.id);
+      const sessionId = detail.sessionId?.trim();
+      if (sessionId) {
+        setSessionById(prev => ({ ...prev, [tx.id]: sessionId }));
+      }
       setSelectedTx(prev =>
         prev?.id === tx.id
           ? {
               ...prev,
               ...detail,
-              sessionId: detail.sessionId || prev.sessionId,
+              sessionId: sessionId || prev.sessionId,
             }
           : prev
       );
@@ -77,11 +108,12 @@ export const HistoryScreen: React.FC = () => {
     }
   };
 
-  const filteredTxs = transactions.filter(tx => {
+  const filteredTxs = transactions.map(withSession).filter(tx => {
     const matchesSearch =
       tx.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
       tx.subtitle.toLowerCase().includes(searchQuery.toLowerCase()) ||
       tx.reference.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (tx.sessionId && tx.sessionId.toLowerCase().includes(searchQuery.toLowerCase())) ||
       (tx.token && tx.token.includes(searchQuery));
 
     if (!matchesSearch) return false;
@@ -143,16 +175,20 @@ export const HistoryScreen: React.FC = () => {
     showToast('Token Copied', `${token} copied to clipboard.`);
   };
 
-  const copyRef = (ref: string, e: React.MouseEvent) => {
+  const copyTrailId = (label: string, value: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (navigator.clipboard) {
-      navigator.clipboard.writeText(ref);
+    if (!value || value === '—') {
+      showToast('Unavailable', `${label} is not ready yet.`, 'warning');
+      return;
     }
-    showToast('Reference Copied', `${ref} copied.`);
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(value);
+    }
+    showToast(`${label} copied`, value);
   };
 
   const searchInputClass =
-    'w-full h-11 pl-10 pr-11 rounded-2xl bg-black/[0.04] dark:bg-white/[0.06] border border-[var(--glass-border)] text-[var(--text)] placeholder:text-[var(--muted)] text-xs focus:outline-none focus:ring-2 focus:ring-[var(--accent)]/25 transition-all';
+    'w-full h-11 pl-10 pr-4 rounded-2xl bg-black/[0.04] dark:bg-white/[0.06] border border-[var(--glass-border)] text-[var(--text)] placeholder:text-[var(--muted)] text-xs focus:outline-none focus:ring-2 focus:ring-[var(--accent)]/25 transition-all';
 
   const renderTodayRow = (tx: Transaction) => (
     <div
@@ -184,18 +220,26 @@ export const HistoryScreen: React.FC = () => {
                 </button>
               </div>
             )}
-            {!tx.token && (
-              <div className="flex items-center gap-1.5 mt-1 text-[10px] text-[var(--muted)]">
-                <span>Ref: {tx.reference}</span>
-                <button
-                  type="button"
-                  onClick={e => copyRef(tx.reference, e)}
-                  className="text-[var(--muted)] hover:text-[var(--text)]"
-                >
-                  <Icon name="content_copy" size={11} />
-                </button>
-              </div>
-            )}
+            {!tx.token && (() => {
+              const trail = txTrailId(tx);
+              return (
+                <div className="flex items-center gap-1.5 mt-1 text-[10px] text-[var(--muted)] min-w-0">
+                  <span className="truncate">
+                    {trail.label}: {trail.value}
+                  </span>
+                  {trail.value !== '—' && (
+                    <button
+                      type="button"
+                      onClick={e => copyTrailId(trail.label, trail.value, e)}
+                      className="shrink-0 text-[var(--muted)] hover:text-[var(--text)]"
+                      title={`Copy ${trail.label}`}
+                    >
+                      <Icon name="content_copy" size={11} />
+                    </button>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         </div>
         <div className="text-right shrink-0">
@@ -381,14 +425,6 @@ export const HistoryScreen: React.FC = () => {
           value={searchQuery}
           onChange={e => setSearchQuery(e.target.value)}
         />
-        <button
-          type="button"
-          onClick={() => showToast('Scan', 'Scanning QR code for transaction reference...', 'info')}
-          className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-[var(--muted)] hover:text-[var(--text)] transition-colors"
-          title="Scan QR Code or Ref"
-        >
-          <Icon name="qr_code_scanner" size={18} />
-        </button>
       </div>
 
       <div className="flex items-center gap-2 overflow-x-auto no-scrollbar py-0.5 text-xs">
@@ -431,14 +467,45 @@ export const HistoryScreen: React.FC = () => {
                 <Icon name="receipt" size={18} className="text-[var(--accent)]" />
                 <h3 className="text-sm font-semibold text-[var(--text)]">Transaction receipt</h3>
               </div>
-              <button
-                type="button"
-                onClick={() => setSelectedTx(null)}
-                className="frosted-pad !h-9 !w-9 !min-h-9 !min-w-9 !rounded-full text-[var(--muted)]"
-                aria-label="Close"
-              >
-                <Icon name="close" size={18} />
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const lines = [
+                      'Xtrapay transaction receipt',
+                      `${selectedTx.type === 'credit' ? '+' : '-'}₦${selectedTx.amount.toLocaleString()}`,
+                      selectedTx.title,
+                      `Status: ${selectedTx.status}`,
+                      `Reference: ${selectedTx.reference}`,
+                      selectedTx.sessionId ? `Session ID: ${selectedTx.sessionId}` : null,
+                      `Date & time: ${selectedTx.date} • ${selectedTx.fullTime || selectedTx.timestamp}`,
+                      selectedTx.bank ? `Bank: ${selectedTx.bank}` : null,
+                      selectedTx.accountNumber ? `Account: ${selectedTx.accountNumber}` : null,
+                      selectedTx.recipient ? `Recipient: ${selectedTx.recipient}` : null,
+                      selectedTx.token ? `Token: ${selectedTx.token}` : null,
+                      selectedTx.note ? `Narration: ${selectedTx.note}` : null,
+                    ].filter(Boolean) as string[];
+                    const text = lines.join('\n');
+                    if (navigator.clipboard) {
+                      void navigator.clipboard.writeText(text);
+                      showToast('Receipt copied', 'Full receipt text copied to clipboard.', 'success');
+                    }
+                  }}
+                  className="frosted-pad !h-9 !w-9 !min-h-9 !min-w-9 !rounded-full text-[var(--muted)]"
+                  aria-label="Copy entire receipt"
+                  title="Copy entire receipt"
+                >
+                  <Icon name="content_copy" size={16} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedTx(null)}
+                  className="frosted-pad !h-9 !w-9 !min-h-9 !min-w-9 !rounded-full text-[var(--muted)]"
+                  aria-label="Close"
+                >
+                  <Icon name="close" size={18} />
+                </button>
+              </div>
             </div>
 
             <div className="text-center py-2">
