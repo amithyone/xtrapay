@@ -234,7 +234,9 @@ export const AskMoneyScreen: React.FC = () => {
       if (ok) {
         setIsPinOpen(false);
         setActiveAcceptRequestId(null);
+        return;
       }
+      return false;
     }
   };
 
@@ -790,7 +792,7 @@ export const AskMoneyScreen: React.FC = () => {
           setIsPinOpen(false);
           setActiveAcceptRequestId(null);
         }}
-        onSuccess={pin => void handlePinSuccess(pin)}
+        onSuccess={handlePinSuccess}
         title="Confirm payment"
         subtitle={
           activeRequestForPin

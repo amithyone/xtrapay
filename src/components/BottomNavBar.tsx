@@ -52,6 +52,7 @@ export const BottomNavBar: React.FC = () => {
         'limits',
         'support',
         'network',
+        'referrals',
       ],
     },
     {

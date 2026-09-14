@@ -297,7 +297,7 @@ export const DollarCardScreen: React.FC = () => {
                 ? 'Confirm physical Naira card issuance'
                 : 'Confirm virtual USD card issuance'
           }
-          onSuccess={pin => void handleRequestSuccess(pin)}
+          onSuccess={handleRequestSuccess}
         />
       </main>
     );
@@ -564,14 +564,14 @@ export const DollarCardScreen: React.FC = () => {
               ? 'Confirm physical Naira card issuance'
               : 'Confirm virtual USD card issuance'
         }
-        onSuccess={pin => void handleRequestSuccess(pin)}
+        onSuccess={handleRequestSuccess}
       />
       <PinSheetModal
         isOpen={fundPinOpen}
         onClose={() => !busy && setFundPinOpen(false)}
         title="Confirm card funding"
         subtitle={`Load $${fundAmountUsd} USD`}
-        onSuccess={pin => void handleFundPinSuccess(pin)}
+        onSuccess={handleFundPinSuccess}
       />
     </main>
   );

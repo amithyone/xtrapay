@@ -366,7 +366,7 @@ export const XPointsScreen: React.FC = () => {
         title="Authorize Redemption"
         subtitle={`Redeem ${xpAmount || '0'} XP as ${REDEEM_OPTIONS.find(o => o.id === redeemOption)?.label}`}
         amount={nairaValue}
-        onSuccess={pin => void handleRedeemSuccess(pin)}
+        onSuccess={handleRedeemSuccess}
       />
     </main>
   );

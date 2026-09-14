@@ -215,6 +215,14 @@ export const APP_SEARCH_CATALOG: AppSearchItem[] = [
     action: { type: 'screen', screen: 'xpoints' },
   },
   {
+    id: 'referrals',
+    title: 'Referral',
+    subtitle: 'Invite friends and earn bonuses',
+    icon: 'gift',
+    keywords: 'referral refer invite code bonus leaderboard share paycode',
+    action: { type: 'screen', screen: 'referrals' },
+  },
+  {
     id: 'request',
     title: 'Request money',
     subtitle: 'Ask peers or share a link',

@@ -243,7 +243,7 @@ export const SettlementScreen: React.FC = () => {
         title="Confirm settlement"
         subtitle={`Settle ${amount ? money(Number(amount)) : '—'} to linked bank`}
         amount={Number(amount) || undefined}
-        onSuccess={pin => void onPinSuccess(pin)}
+        onSuccess={onPinSuccess}
       />
     </main>
   );

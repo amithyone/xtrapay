@@ -32,6 +32,7 @@ import { LimitsScreen } from './components/screens/LimitsScreen';
 import { SupportScreen } from './components/screens/SupportScreen';
 import { NetworkScreen } from './components/screens/NetworkScreen';
 import { NotificationsScreen } from './components/screens/NotificationsScreen';
+import { ReferralsScreen } from './components/screens/ReferralsScreen';
 import { AuthFlow } from './components/auth/AuthFlow';
 import { TransferSuccessModal } from './components/modals/TransferSuccessModal';
 import { QrModal } from './components/modals/QrModal';
@@ -125,6 +126,8 @@ const AppContent: React.FC = () => {
         return <NetworkScreen />;
       case 'notifications':
         return <NotificationsScreen />;
+      case 'referrals':
+        return <ReferralsScreen />;
       default:
         return USE_LEGACY_HUB ? <HubScreenLegacy /> : <HubScreen />;
     }

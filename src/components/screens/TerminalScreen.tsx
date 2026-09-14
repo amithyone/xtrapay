@@ -739,7 +739,7 @@ export const TerminalScreen: React.FC = () => {
               ? 'All POS'
               : terminals.find(t => t.id === sweepTarget)?.terminalId
           }
-          onSuccess={pin => void handleSweepSuccess(pin)}
+          onSuccess={handleSweepSuccess}
         />
       </main>
     );
@@ -1326,7 +1326,7 @@ export const TerminalScreen: React.FC = () => {
         subtitle={`Fund ${selected.name} from your wallet`}
         amount={pendingFundAmount}
         recipient={selected.terminalId}
-        onSuccess={pin => void handleFundPinSuccess(pin)}
+        onSuccess={handleFundPinSuccess}
       />
 
       <PinSheetModal
@@ -1335,7 +1335,7 @@ export const TerminalScreen: React.FC = () => {
         title="Confirm Withdrawal"
         subtitle={selected ? `Withdraw ${money(pendingWithdrawAmount)} from ${selected.name}` : 'Withdraw float'}
         amount={pendingWithdrawAmount || undefined}
-        onSuccess={pin => void handleWithdrawPinSuccess(pin)}
+        onSuccess={handleWithdrawPinSuccess}
       />
 
       <PinSheetModal

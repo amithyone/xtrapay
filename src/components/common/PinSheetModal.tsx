@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Icon } from '../Icon';
+import { BotanicalXIcon } from '../BackgroundDepthPattern';
 
 interface PinSheetModalProps {
   isOpen: boolean;
@@ -12,6 +13,10 @@ interface PinSheetModalProps {
   onSuccess: (pin: string) => void | boolean | Promise<void | boolean>;
 }
 
+/**
+ * Transaction PIN pad. Locks keypad + close while submitting so VTU / transfers
+ * cannot double-fire after the 4th digit.
+ */
 export const PinSheetModal: React.FC<PinSheetModalProps> = ({
   isOpen,
   onClose,
@@ -24,51 +29,57 @@ export const PinSheetModal: React.FC<PinSheetModalProps> = ({
   const [pin, setPin] = useState<string>('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const submittingRef = useRef(false);
 
   useEffect(() => {
     if (!isOpen) {
       setPin('');
       setBusy(false);
       setError(null);
+      submittingRef.current = false;
     }
   }, [isOpen]);
 
   if (!isOpen) return null;
 
   const submitPin = async (nextPin: string) => {
-    if (busy) return;
-    setBusy(true);
     setError(null);
+    submittingRef.current = true;
+    setBusy(true);
     try {
-      const result = await onSuccess(nextPin);
+      const result = await Promise.resolve(onSuccess(nextPin));
       if (result === false) {
         setPin('');
         setError('Invalid PIN');
+        submittingRef.current = false;
+        setBusy(false);
         return;
       }
+      // Success: keep locked until parent closes the sheet (avoid re-entry).
       setPin('');
     } catch (err) {
       setPin('');
       setError(err instanceof Error ? err.message : 'Invalid PIN');
-    } finally {
+      submittingRef.current = false;
       setBusy(false);
     }
   };
 
   const handleKeyPress = (digit: string) => {
-    if (busy) return;
+    if (busy || submittingRef.current || pin.length >= 4) return;
     setError(null);
-    if (pin.length < 4) {
-      const nextPin = pin + digit;
-      setPin(nextPin);
-      if (nextPin.length === 4) {
-        void submitPin(nextPin);
-      }
+    const nextPin = pin + digit;
+    setPin(nextPin);
+    if (nextPin.length === 4) {
+      // Freeze immediately so rapid taps cannot enqueue another submit.
+      submittingRef.current = true;
+      setBusy(true);
+      void submitPin(nextPin);
     }
   };
 
   const handleDelete = () => {
-    if (busy) return;
+    if (busy || submittingRef.current) return;
     setError(null);
     setPin(prev => prev.slice(0, -1));
   };
@@ -78,6 +89,7 @@ export const PinSheetModal: React.FC<PinSheetModalProps> = ({
       <div
         className="app-modal-panel bg-[#181c24] border border-[#464554]/40 p-6 shadow-2xl space-y-5 animate-slideUp text-center"
         id="pin-sheet-modal"
+        aria-busy={busy}
       >
         <div className="flex items-center justify-between pb-2 border-b border-[#464554]/20">
           <div className="flex items-center space-x-2">
@@ -90,12 +102,13 @@ export const PinSheetModal: React.FC<PinSheetModalProps> = ({
           </div>
           <button
             onClick={() => {
-              if (busy) return;
+              if (busy || submittingRef.current) return;
               setPin('');
               setError(null);
               onClose();
             }}
-            className="p-1.5 text-[#908fa0] hover:text-[#dfe2ee] transition-colors rounded-lg hover:bg-[#262a33]"
+            disabled={busy}
+            className="p-1.5 text-[#908fa0] hover:text-[#dfe2ee] transition-colors rounded-lg hover:bg-[#262a33] disabled:opacity-30 disabled:pointer-events-none"
             type="button"
             aria-label="Close PIN Sheet"
           >
@@ -118,34 +131,46 @@ export const PinSheetModal: React.FC<PinSheetModalProps> = ({
           {subtitle && <p className="text-xs text-[#908fa0]">{subtitle}</p>}
         </div>
 
-        <div className="flex justify-center items-center space-x-4 py-2">
-          {[0, 1, 2, 3].map(idx => (
-            <div
-              key={idx}
-              className={`w-3.5 h-3.5 rounded-full transition-all duration-200 ${
-                pin.length > idx
-                  ? 'bg-[#c0c1ff] scale-110 shadow-md shadow-[#8083ff]/50'
-                  : 'bg-[#31353e] border border-[#464554]/60'
-              }`}
-            />
-          ))}
-        </div>
+        {busy ? (
+          <div className="flex flex-col items-center justify-center gap-3 py-3" aria-live="polite">
+            <span className="relative flex h-14 w-14 items-center justify-center">
+              <span className="absolute inset-0 rounded-full border-2 border-[#8083ff]/25 border-t-[#c0c1ff] animate-spin" />
+              <BotanicalXIcon className="w-7 h-7" strokeColor="#c0c1ff" opacity={1} strokeWidth={2.5} />
+            </span>
+            <p className="text-[12px] font-medium text-[#c0c1ff]">Processing…</p>
+          </div>
+        ) : (
+          <div className="flex justify-center items-center space-x-4 py-2">
+            {[0, 1, 2, 3].map(idx => (
+              <div
+                key={idx}
+                className={`w-3.5 h-3.5 rounded-full transition-all duration-200 ${
+                  pin.length > idx
+                    ? 'bg-[#c0c1ff] scale-110 shadow-md shadow-[#8083ff]/50'
+                    : 'bg-[#31353e] border border-[#464554]/60'
+                }`}
+              />
+            ))}
+          </div>
+        )}
 
         {error ? (
           <p className="text-[11px] text-rose-400">{error}</p>
-        ) : (
-          <p className="text-[11px] text-[#908fa0]">
-            {busy ? 'Verifying PIN…' : 'Enter your 4-digit transaction PIN'}
-          </p>
-        )}
+        ) : !busy ? (
+          <p className="text-[11px] text-[#908fa0]">Enter your 4-digit transaction PIN</p>
+        ) : null}
 
-        <div className="grid grid-cols-3 gap-2.5 max-w-xs mx-auto pt-1">
+        <div
+          className={`grid grid-cols-3 gap-2.5 max-w-xs mx-auto pt-1 transition-opacity ${
+            busy ? 'opacity-35 pointer-events-none' : ''
+          }`}
+        >
           {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(num => (
             <button
               key={num}
               onClick={() => handleKeyPress(num)}
-              disabled={busy}
-              className="h-12 rounded-xl bg-[#262a33] hover:bg-[#31353e] active:scale-95 text-[#dfe2ee] font-mono text-lg font-semibold border border-[#464554]/30 transition-all flex items-center justify-center cursor-pointer disabled:opacity-40"
+              disabled={busy || submittingRef.current || pin.length >= 4}
+              className="h-12 rounded-xl bg-[#262a33] hover:bg-[#31353e] active:scale-95 text-[#dfe2ee] font-mono text-lg font-semibold border border-[#464554]/30 transition-all flex items-center justify-center cursor-pointer disabled:opacity-40 disabled:pointer-events-none disabled:active:scale-100"
               type="button"
             >
               {num}
@@ -161,16 +186,16 @@ export const PinSheetModal: React.FC<PinSheetModalProps> = ({
           </button>
           <button
             onClick={() => handleKeyPress('0')}
-            disabled={busy}
-            className="h-12 rounded-xl bg-[#262a33] hover:bg-[#31353e] active:scale-95 text-[#dfe2ee] font-mono text-lg font-semibold border border-[#464554]/30 transition-all flex items-center justify-center cursor-pointer disabled:opacity-40"
+            disabled={busy || submittingRef.current || pin.length >= 4}
+            className="h-12 rounded-xl bg-[#262a33] hover:bg-[#31353e] active:scale-95 text-[#dfe2ee] font-mono text-lg font-semibold border border-[#464554]/30 transition-all flex items-center justify-center cursor-pointer disabled:opacity-40 disabled:pointer-events-none disabled:active:scale-100"
             type="button"
           >
             0
           </button>
           <button
             onClick={handleDelete}
-            disabled={busy}
-            className="h-12 rounded-xl bg-[#262a33] hover:bg-[#31353e] active:scale-95 text-[#908fa0] hover:text-[#dfe2ee] border border-[#464554]/30 transition-all flex items-center justify-center cursor-pointer disabled:opacity-40"
+            disabled={busy || submittingRef.current || pin.length === 0}
+            className="h-12 rounded-xl bg-[#262a33] hover:bg-[#31353e] active:scale-95 text-[#908fa0] hover:text-[#dfe2ee] border border-[#464554]/30 transition-all flex items-center justify-center cursor-pointer disabled:opacity-40 disabled:pointer-events-none"
             type="button"
             title="Delete"
           >

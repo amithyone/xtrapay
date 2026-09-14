@@ -28,7 +28,8 @@ export type ScreenType =
   | 'limits'
   | 'support'
   | 'network'
-  | 'notifications';
+  | 'notifications'
+  | 'referrals';
 
 export type AccountContext = 'personal' | 'business';
 

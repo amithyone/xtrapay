@@ -14,6 +14,7 @@ export const TransferSuccessModal: React.FC = () => {
     repeatTransfer,
     showToast,
     theme,
+    setActiveScreen,
   } = useTransactions();
   const [busy, setBusy] = useState<'image' | 'pdf' | 'share' | null>(null);
 
@@ -105,9 +106,10 @@ export const TransferSuccessModal: React.FC = () => {
               </span>
               <button
                 aria-label="Support Agent"
-                onClick={() =>
-                  showToast('Support Agent', 'Live transaction dispute window active.', 'info')
-                }
+                onClick={() => {
+                  dismissActiveTransfer();
+                  setActiveScreen('support');
+                }}
                 className="frosted-pad !h-8 !w-8 !min-h-8 !min-w-8 !rounded-lg text-[var(--muted)]"
                 type="button"
               >

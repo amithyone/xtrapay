@@ -7,6 +7,8 @@ export type RegisterBasicPayload = {
   phone: string;
   email: string;
   password: string;
+  /** Referrer pay code or phone (optional) */
+  referralCode?: string;
 };
 
 interface RegisterScreenProps {
@@ -37,6 +39,7 @@ export const RegisterScreen: React.FC<RegisterScreenProps> = ({
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [referralCode, setReferralCode] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [accepted, setAccepted] = useState(false);
   const [error, setError] = useState('');
@@ -69,6 +72,7 @@ export const RegisterScreen: React.FC<RegisterScreenProps> = ({
       phone: phone.trim(),
       email: email.trim(),
       password,
+      ...(referralCode.trim() ? { referralCode: referralCode.trim() } : {}),
     });
   };
 
@@ -151,6 +155,14 @@ export const RegisterScreen: React.FC<RegisterScreenProps> = ({
           <Icon name={showPassword ? 'visibility_off' : 'visibility'} size={18} />
         </button>
       </div>
+      <input
+        className={authFieldClass}
+        value={referralCode}
+        onChange={e => setReferralCode(e.target.value)}
+        placeholder="Referral code or phone (optional)"
+        autoComplete="off"
+        autoCapitalize="characters"
+      />
 
       <label className="flex items-start gap-2.5 text-[12px] text-[var(--muted)] leading-snug cursor-pointer">
         <input

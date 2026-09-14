@@ -281,10 +281,28 @@ export async function apiRegister(payload: {
   phone: string;
   email: string;
   password: string;
+  /** Referrer pay code or phone — attribution locked once set */
+  referralCode?: string;
+  referredBy?: string;
 }) {
+  const referral =
+    (payload.referralCode || payload.referredBy || '').trim() || undefined;
   return apiRequest<{ registrationId: string }>('/auth/register', {
     method: 'POST',
-    body: JSON.stringify(payload),
+    body: JSON.stringify({
+      fullName: payload.fullName,
+      phone: payload.phone,
+      email: payload.email,
+      password: payload.password,
+      ...(referral
+        ? {
+            referralCode: referral,
+            referredBy: referral,
+            referral_code: referral,
+            referred_by: referral,
+          }
+        : {}),
+    }),
   });
 }
 
@@ -2023,7 +2041,7 @@ export async function apiLogout() {
   }
 }
 
-/* ── In-app notifications (credits / top-ups / alerts) ── */
+/* ── In-app notifications (credits / money requests / group savings) ── */
 
 export type ApiAppNotification = {
   id: string;
@@ -2037,6 +2055,12 @@ export type ApiAppNotification = {
   walletId?: string | null;
   wallet_id?: string | null;
   reference?: string | null;
+  action?: string | null;
+  screen?: string | null;
+  entityType?: string | null;
+  entity_type?: string | null;
+  entityId?: string | null;
+  entity_id?: string | null;
   read?: boolean;
   createdAt?: string;
   created_at?: string;
@@ -2050,13 +2074,24 @@ export type AppNotification = {
   amount: number | null;
   walletId: string | null;
   reference: string | null;
+  /** App screen hint: ask_money | save_together | history | … */
+  action: string | null;
+  entityType: string | null;
+  entityId: string | null;
   read: boolean;
   createdAt: string;
 };
 
+function notificationHaystack(n: Pick<AppNotification, 'type' | 'title' | 'body' | 'action' | 'entityType'>): string {
+  return `${n.type} ${n.title} ${n.body} ${n.action || ''} ${n.entityType || ''}`.toLowerCase();
+}
+
 /** Credit / VA / wallet top-up style alerts that should chime + refresh balances. */
-export function isCreditTopUpNotification(n: Pick<AppNotification, 'type' | 'title' | 'body'>): boolean {
-  const t = `${n.type} ${n.title} ${n.body}`.toLowerCase();
+export function isCreditTopUpNotification(
+  n: Pick<AppNotification, 'type' | 'title' | 'body' | 'action' | 'entityType'>
+): boolean {
+  const t = notificationHaystack(n);
+  if (isMoneyRequestNotification(n) || isGroupSavingsNotification(n)) return false;
   return (
     t.includes('credit') ||
     t.includes('topup') ||
@@ -2072,6 +2107,48 @@ export function isCreditTopUpNotification(n: Pick<AppNotification, 'type' | 'tit
   );
 }
 
+/** Incoming / status updates for Ask Money (peer requests). */
+export function isMoneyRequestNotification(
+  n: Pick<AppNotification, 'type' | 'title' | 'body' | 'action' | 'entityType'>
+): boolean {
+  const t = notificationHaystack(n);
+  return (
+    t.includes('money_request') ||
+    n.action === 'ask_money' ||
+    n.entityType === 'money_request' ||
+    (t.includes('asked you') && t.includes('request')) ||
+    (t.includes('money request') && !t.includes('credit'))
+  );
+}
+
+/** Group savings / pot invites & contributions. */
+export function isGroupSavingsNotification(
+  n: Pick<AppNotification, 'type' | 'title' | 'body' | 'action' | 'entityType'>
+): boolean {
+  const t = notificationHaystack(n);
+  return (
+    t.includes('pot_') ||
+    t.includes('pot invite') ||
+    t.includes('group savings') ||
+    t.includes('group pot') ||
+    n.action === 'save_together' ||
+    n.entityType === 'pot' ||
+    (t.includes('invite') && t.includes('pot')) ||
+    t.includes('contribution') && (t.includes('pot') || t.includes('group'))
+  );
+}
+
+/** Screen to open when the user taps the alert. */
+export function notificationDeepLinkScreen(
+  n: Pick<AppNotification, 'type' | 'title' | 'body' | 'action' | 'entityType'>
+): 'ask_money' | 'save_together' | 'history' | 'notifications' | null {
+  if (n.action === 'ask_money' || isMoneyRequestNotification(n)) return 'ask_money';
+  if (n.action === 'save_together' || isGroupSavingsNotification(n)) return 'save_together';
+  if (n.action === 'history' || isCreditTopUpNotification(n)) return 'history';
+  if (n.action === 'notifications') return 'notifications';
+  return null;
+}
+
 export function mapApiNotification(raw: ApiAppNotification): AppNotification {
   return {
     id: String(raw.id),
@@ -2084,6 +2161,17 @@ export function mapApiNotification(raw: ApiAppNotification): AppNotification {
       ? String(raw.walletId ?? raw.wallet_id)
       : null,
     reference: raw.reference != null ? String(raw.reference) : null,
+    action: raw.action != null || raw.screen != null
+      ? String(raw.action ?? raw.screen)
+      : null,
+    entityType:
+      raw.entityType != null || raw.entity_type != null
+        ? String(raw.entityType ?? raw.entity_type)
+        : null,
+    entityId:
+      raw.entityId != null || raw.entity_id != null
+        ? String(raw.entityId ?? raw.entity_id)
+        : null,
     read: Boolean(raw.read),
     createdAt: String(raw.createdAt ?? raw.created_at ?? ''),
   };
@@ -2924,4 +3012,179 @@ export async function apiTerminalSupport(
       body: JSON.stringify(payload),
     }
   );
+}
+
+/* ── Referrals (mirror consumer engine under /xtrapay/referrals/*) ── */
+
+export type AppReferralRules = {
+  firstTopupBonusPct: number;
+  firstTopupBonusCap: number;
+  minFirstTopup: number;
+  milestoneEveryTxns: number;
+  milestoneBonus: number;
+  bonusWindowMonths: number;
+  description: string;
+};
+
+export type AppReferralMe = {
+  payCode: string;
+  phone: string;
+  referredCount: number;
+  earnedTotal: number;
+  pendingBonuses: number;
+  bonusWindowOpen: boolean;
+  referredByCode: string | null;
+  rank: number | null;
+};
+
+export type AppReferralInvite = {
+  payCode: string;
+  shareText: string;
+  shareUrl: string;
+  qrPayload?: string;
+};
+
+export type AppReferralEntry = {
+  id: string;
+  name: string;
+  phoneMasked: string;
+  status: string;
+  joinedAt: string;
+  earnedFromThem: number;
+};
+
+export type AppReferralBonus = {
+  id: string;
+  title: string;
+  amount: number;
+  status: string;
+  createdAt: string;
+  meta: string;
+};
+
+export type AppReferralLeaderRow = {
+  rank: number;
+  name: string;
+  payCode: string;
+  referredCount: number;
+  earnedTotal: number;
+  isMe: boolean;
+};
+
+function num(v: unknown, fallback = 0) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+export async function apiReferralRules(): Promise<AppReferralRules> {
+  const raw = await apiRequest<Record<string, unknown>>('/referrals/rules');
+  return {
+    firstTopupBonusPct: num(raw.firstTopupBonusPct ?? raw.first_topup_bonus_pct ?? raw.topupPct, 0),
+    firstTopupBonusCap: num(raw.firstTopupBonusCap ?? raw.first_topup_bonus_cap ?? raw.topupCap, 0),
+    minFirstTopup: num(raw.minFirstTopup ?? raw.min_first_topup ?? raw.minTopup, 0),
+    milestoneEveryTxns: num(
+      raw.milestoneEveryTxns ?? raw.milestone_every_txns ?? raw.milestoneEvery,
+      100
+    ),
+    milestoneBonus: num(raw.milestoneBonus ?? raw.milestone_bonus, 200),
+    bonusWindowMonths: num(raw.bonusWindowMonths ?? raw.bonus_window_months, 6),
+    description: String(
+      raw.description ??
+        raw.summary ??
+        'Earn when people you invite top up and spend on Xtrapay.'
+    ),
+  };
+}
+
+export async function apiReferralMe(): Promise<AppReferralMe> {
+  const raw = await apiRequest<Record<string, unknown>>('/referrals/me');
+  return {
+    payCode: String(raw.payCode ?? raw.pay_code ?? raw.code ?? ''),
+    phone: String(raw.phone ?? ''),
+    referredCount: num(raw.referredCount ?? raw.referred_count ?? raw.count),
+    earnedTotal: num(raw.earnedTotal ?? raw.earned_total ?? raw.totalEarned),
+    pendingBonuses: num(raw.pendingBonuses ?? raw.pending_bonuses ?? raw.pending),
+    bonusWindowOpen: Boolean(
+      raw.bonusWindowOpen ?? raw.bonus_window_open ?? raw.windowOpen ?? true
+    ),
+    referredByCode:
+      raw.referredByCode != null || raw.referred_by_code != null || raw.referredBy != null
+        ? String(raw.referredByCode ?? raw.referred_by_code ?? raw.referredBy)
+        : null,
+    rank:
+      raw.rank != null && Number.isFinite(Number(raw.rank)) ? Number(raw.rank) : null,
+  };
+}
+
+export async function apiReferralInvite(): Promise<AppReferralInvite> {
+  const raw = await apiRequest<Record<string, unknown>>('/referrals/invite');
+  const payCode = String(raw.payCode ?? raw.pay_code ?? raw.code ?? '');
+  const shareUrl = String(
+    raw.shareUrl ??
+      raw.share_url ??
+      raw.url ??
+      (payCode ? `https://xtrapay.ng/?ref=${encodeURIComponent(payCode)}` : '')
+  );
+  const shareText = String(
+    raw.shareText ??
+      raw.share_text ??
+      raw.message ??
+      (payCode
+        ? `Join me on Xtrapay — use my code ${payCode} when you sign up. ${shareUrl}`
+        : 'Join me on Xtrapay.')
+  );
+  return {
+    payCode,
+    shareText,
+    shareUrl,
+    qrPayload: raw.qrPayload != null || raw.qr_payload != null
+      ? String(raw.qrPayload ?? raw.qr_payload)
+      : shareUrl || undefined,
+  };
+}
+
+export async function apiReferralList(): Promise<AppReferralEntry[]> {
+  const data = await apiRequest<
+    Record<string, unknown>[] | { referrals?: Record<string, unknown>[]; list?: Record<string, unknown>[] }
+  >('/referrals/list');
+  const list = Array.isArray(data) ? data : data?.referrals ?? data?.list ?? [];
+  return list.map((r, i) => ({
+    id: String(r.id ?? `ref_${i}`),
+    name: String(r.name ?? r.fullName ?? r.full_name ?? 'Member'),
+    phoneMasked: String(r.phoneMasked ?? r.phone_masked ?? r.phone ?? '—'),
+    status: String(r.status ?? 'active'),
+    joinedAt: String(r.joinedAt ?? r.joined_at ?? r.createdAt ?? r.created_at ?? ''),
+    earnedFromThem: num(r.earnedFromThem ?? r.earned_from_them ?? r.earned ?? r.bonus),
+  }));
+}
+
+export async function apiReferralBonuses(): Promise<AppReferralBonus[]> {
+  const data = await apiRequest<
+    Record<string, unknown>[] | { bonuses?: Record<string, unknown>[]; items?: Record<string, unknown>[] }
+  >('/referrals/bonuses');
+  const list = Array.isArray(data) ? data : data?.bonuses ?? data?.items ?? [];
+  return list.map((b, i) => ({
+    id: String(b.id ?? `bonus_${i}`),
+    title: String(b.title ?? b.label ?? b.type ?? 'Referral bonus'),
+    amount: num(b.amount ?? b.value),
+    status: String(b.status ?? 'paid'),
+    createdAt: String(b.createdAt ?? b.created_at ?? b.date ?? ''),
+    meta: String(b.meta ?? b.subtitle ?? b.note ?? ''),
+  }));
+}
+
+export async function apiReferralLeaderboard(): Promise<AppReferralLeaderRow[]> {
+  const data = await apiRequest<
+    | Record<string, unknown>[]
+    | { leaderboard?: Record<string, unknown>[]; rows?: Record<string, unknown>[] }
+  >('/referrals/leaderboard');
+  const list = Array.isArray(data) ? data : data?.leaderboard ?? data?.rows ?? [];
+  return list.map((r, i) => ({
+    rank: num(r.rank ?? i + 1, i + 1),
+    name: String(r.name ?? r.fullName ?? r.full_name ?? 'Member'),
+    payCode: String(r.payCode ?? r.pay_code ?? r.code ?? ''),
+    referredCount: num(r.referredCount ?? r.referred_count ?? r.count),
+    earnedTotal: num(r.earnedTotal ?? r.earned_total ?? r.earned),
+    isMe: Boolean(r.isMe ?? r.is_me ?? r.me),
+  }));
 }

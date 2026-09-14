@@ -275,7 +275,7 @@ export const LoansScreen: React.FC = () => {
           onClose={() => !busy && setPinOpen(false)}
           title="Confirm loan request"
           subtitle={`Borrow ${amount ? money(Number(amount.replace(/,/g, ''))) : '—'} · ${tenor}`}
-          onSuccess={pin => void onPinSuccess(pin)}
+          onSuccess={onPinSuccess}
         />
       </main>
     );
@@ -426,7 +426,7 @@ export const LoansScreen: React.FC = () => {
               : 'Enter your transaction PIN'
           }
           amount={Number(repayAmount.replace(/,/g, '')) || undefined}
-          onSuccess={pin => void onPinSuccess(pin)}
+          onSuccess={onPinSuccess}
         />
       </main>
     );

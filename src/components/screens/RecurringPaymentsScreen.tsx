@@ -904,7 +904,7 @@ export const RecurringPaymentsScreen: React.FC = () => {
         subtitle={`${schedulePreview.label} · Next ${schedulePreview.nextRun}`}
         amount={parseFloat(amountStr.replace(/,/g, '')) || undefined}
         recipient={recipientName}
-        onSuccess={pin => void handlePinSuccess(pin)}
+        onSuccess={handlePinSuccess}
       />
     </main>
   );

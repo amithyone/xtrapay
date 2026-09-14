@@ -109,6 +109,11 @@ export const ServicesScreen: React.FC = () => {
       onClick: () => setActiveScreen('xpoints'),
     },
     {
+      label: 'Referral',
+      icon: 'gift',
+      onClick: () => setActiveScreen('referrals'),
+    },
+    {
       label: 'Request',
       icon: 'request_quote',
       onClick: () => setActiveScreen('ask_money'),

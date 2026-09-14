@@ -440,10 +440,22 @@ XPointsSummary {
 ```ts
 SupportTicket { id, subject, category, status: Open|Pending|Resolved, updatedAt, messages? }
 NetworkRail {
-  id, name, backend, status: Active|Degraded|Down,
-  successRate, uptime, latencyMs, lastTrafficAt, volume24h
+  id: string
+  name: string                 // e.g. "NIP Instant"
+  backend: string              // e.g. "NIBSS · interbank"
+  icon?: string                // lucide/material key: hub | payments | cell_tower …
+  status: 'Active' | 'Degraded' | 'Down'
+  successRate: number          // 0–100
+  uptime: number               // 0–100
+  latencyMs: number
+  lastTrafficAt?: string       // relative ("2m ago") or ISO — app displays as-is
+  volume24h?: number           // txn count today
+  lastRef?: string
+  lastTitle?: string
 }
 ```
+
+**`GET /network/rails`** — live ops telemetry only. Do **not** hardcode demo rails in the API; empty array is fine when monitoring is offline. App polls on screen open.
 
 ### 3.13 App branding
 
@@ -473,7 +485,7 @@ Frontend flow: Intro → **Register (basic only)** → **OTP** → **PIN** → s
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| POST | `/auth/register` | Basic: `{ fullName, phone, email, password }` → `{ registrationId }` |
+| POST | `/auth/register` | Basic: `{ fullName, phone, email, password, referralCode? }` → `{ registrationId }`. Call wallet referral attribution (`attributeFromRegistration`) when `referralCode` / `referredBy` / pay-code / phone is present. |
 | POST | `/auth/otp/send` | `{ destination, purpose: register\|login\|reset }` |
 | POST | `/auth/otp/verify` | `{ destination, purpose, code, registrationId? }` → tokens |
 | POST | `/auth/login` | `{ identifier, password }` → tokens **or** `{ requiresOtp: true }` |
@@ -603,7 +615,32 @@ TerminalTx {
 | POST | `/credit/collections` | *(optional agent)* record collection + PIN |
 | GET | `/limits` | Caps + dailySpent |
 | PUT | `/limits` | Update caps + PIN |
-| GET | `/network/rails` | Runtime health |
+| GET | `/network/rails` | Runtime health — real rail telemetry (see §3.12). `{ rails: NetworkRail[] }` or bare array. Snake_case ok. |
+
+**Example `GET /network/rails` `200`**
+
+```json
+{
+  "rails": [
+    {
+      "id": "nip",
+      "name": "NIP Instant",
+      "backend": "NIBSS · interbank",
+      "icon": "payments",
+      "status": "Active",
+      "successRate": 99.2,
+      "uptime": 99.95,
+      "latencyMs": 820,
+      "lastTrafficAt": "2m ago",
+      "volume24h": 1842,
+      "lastRef": "NIP-992188",
+      "lastTitle": "Bank transfer"
+    }
+  ]
+}
+```
+
+Empty `{ "rails": [] }` when monitoring is down — **do not** seed fake Healthy rails in production.
 | GET | `/support/tickets` | List |
 | POST | `/support/tickets` | Create |
 | GET | `/support/tickets/:id` | Thread |
@@ -688,9 +725,9 @@ Xtrapay by **Xtratech Global Solutions** · Powered by **CheckoutNow** (licensed
 
 ---
 
-## 11b. Notifications (credits / top-ups)
+## 11b. Notifications (credits, money requests, group savings)
 
-When any wallet is credited (VA top-up, NIP inflow, wallet-to-wallet receive, POS sweep into wallet, card refund, etc.), **create a notification row** for that user. The app polls every ~12s while open.
+The app polls **`GET /notifications`** every ~12s while open. Backend **must create a notification row** for the recipient when an event happens — clients never invent inbox rows.
 
 | Method | Path | Purpose |
 |--------|------|---------|
@@ -698,14 +735,29 @@ When any wallet is credited (VA top-up, NIP inflow, wallet-to-wallet receive, PO
 | POST | `/notifications/:id/read` | Mark one read |
 | POST | `/notifications/read-all` | Mark all read |
 
+> **Server-only create:** insert notification rows in your service layer when the trigger fires (no public `POST /notifications` from the mobile app). Push/FCM is optional later; in-app inbox is required.
+
+### Client fetch (after you create the row)
+
+```http
+GET /api/v1/xtrapay/notifications?limit=40
+Authorization: Bearer <access_token>
+```
+
+Unread badge / soft poll:
+
+```http
+GET /api/v1/xtrapay/notifications?unreadOnly=1&limit=40
+```
+
 **GET `/notifications` `200`**
 
 ```json
 {
-  "unreadCount": 2,
+  "unreadCount": 3,
   "notifications": [
     {
-      "id": "ntf_01H…",
+      "id": "ntf_01HCREDIT",
       "type": "wallet_credit",
       "title": "Money received",
       "body": "Transfer from ADEKUNLE OLUMIDE",
@@ -713,21 +765,72 @@ When any wallet is credited (VA top-up, NIP inflow, wallet-to-wallet receive, PO
       "currency": "NGN",
       "walletId": "personal",
       "reference": "XTR-99218841",
+      "action": "history",
+      "entityType": "transaction",
+      "entityId": "txn_01H…",
       "read": false,
       "createdAt": "2026-09-14T09:12:00Z"
+    },
+    {
+      "id": "ntf_01HASK",
+      "type": "money_request",
+      "title": "Money request",
+      "body": "Chioma Okoro asked you for ₦5,000.00",
+      "amount": 5000,
+      "currency": "NGN",
+      "action": "ask_money",
+      "entityType": "money_request",
+      "entityId": "mr_01H…",
+      "read": false,
+      "createdAt": "2026-09-14T10:01:00Z"
+    },
+    {
+      "id": "ntf_01HPOT",
+      "type": "pot_invite",
+      "title": "Group savings invite",
+      "body": "Join “Lagos Rent 2026” — Ade invited you",
+      "amount": null,
+      "action": "save_together",
+      "entityType": "pot",
+      "entityId": "pot_01H…",
+      "read": false,
+      "createdAt": "2026-09-14T10:05:00Z"
     }
   ]
 }
 ```
 
-Also accepted: bare array of notifications. Snake_case: `wallet_id`, `created_at`, `unread_count`.
+Also accepted: bare array of notifications. Snake_case: `wallet_id`, `entity_type`, `entity_id`, `created_at`, `unread_count`.
 
-**Recommended `type` values (toast + balance refresh when unread & new):**  
+### When to create (triggers)
+
+| Event | Recipient | `type` | `action` | `entityType` / `entityId` |
+|-------|-----------|--------|----------|---------------------------|
+| Wallet credited (VA / NIP / W2W / refund) | Credited user | `wallet_credit` / `va_credit` / `topup` / `inward_transfer` | `history` | `transaction` / txn id |
+| `POST /money-requests` succeeds | **Payee (incoming)** | `money_request` | `ask_money` | `money_request` / request id |
+| Money request accepted | Requester | `money_request_accepted` | `ask_money` | `money_request` / request id |
+| Money request declined | Requester | `money_request_declined` | `ask_money` | `money_request` / request id |
+| Money request cancelled | Payee (if still pending) | `money_request_cancelled` | `ask_money` | `money_request` / request id |
+| `POST /pots` with invited phones | Each **invitee** | `pot_invite` | `save_together` | `pot` / pot id |
+| Member accepts invite | Pot creator (+ other members optional) | `pot_member_joined` | `save_together` | `pot` / pot id |
+| Member declines invite | Pot creator | `pot_invite_declined` | `save_together` | `pot` / pot id |
+| `POST /pots/:id/contribute` | Other pot members | `pot_contribution` | `save_together` | `pot` / pot id |
+| Pot reaches target | All members | `pot_goal_reached` | `save_together` | `pot` / pot id |
+
+**Rules**
+- Create the notification **in the same transaction / immediately after** the domain write succeeds.
+- Do **not** notify the actor about their own action (except goal reached for everyone).
+- Keep `read: false` until `POST /notifications/:id/read` or `/notifications/read-all`.
+- `title` + `body` must be human-readable; app shows them in the inbox and as toasts.
+- Prefer including `amount` when money is involved.
+
+**Recommended credit `type` values (toast + balance refresh):**  
 `wallet_credit` · `va_credit` · `topup` · `inward_transfer` · `deposit` · `funding`
 
-App also treats titles/bodies containing “credit / top-up / received / deposit / inward” as credit alerts.
+**Recommended peer / pot `type` values (toast + open Ask Money / Save Together):**  
+`money_request` · `money_request_incoming` · `money_request_accepted` · `money_request_declined` · `money_request_cancelled` · `pot_invite` · `pot_member_joined` · `pot_invite_declined` · `pot_contribution` · `pot_goal_reached`
 
-**When to insert:** immediately after successful VA/NIP credit or any balance-increasing event. Keep unread until the user opens the inbox or marks read.
+App also treats titles/bodies containing “credit / top-up / received / deposit / inward” as credit alerts; “request / asked you” and “pot / group savings / invite / contribution” as peer/savings alerts.
 
 ---
 
@@ -787,7 +890,74 @@ These are implemented in the mock today — backend should own them:
 6. **Loans + collections**  
 7. **Cards + recurring + statements**  
 8. **Support + network rails**  
-9. **Money requests + pots + proximity**
+9. **Money requests + pots + proximity**  
+10. **Referrals** (`/referrals/*` + register attribution)
+
+---
+
+## 14b. Referrals (Xtrapay mirror of consumer wallet engine)
+
+Engine already exists on Checkout wallet / consumer stack. Wire the **same behaviour** under the Xtrapay prefix so the app can call it with the Xtrapay bearer token.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/referrals/rules` | Bonus % / cap / milestone / window (admin `referral_*` settings) |
+| GET | `/referrals/me` | Pay code, referred count, earned, pending, referredBy, rank |
+| GET | `/referrals/invite` | `{ payCode, shareText, shareUrl, qrPayload? }` |
+| GET | `/referrals/list` | People this user referred |
+| GET | `/referrals/bonuses` | Bonus ledger for referrer |
+| GET | `/referrals/leaderboard` | Ranked referrers |
+
+**Parity with consumer (until Xtrapay routes ship, do not point the app at `/api/v1/consumer/...`):**  
+Consumer today: `GET /api/v1/consumer/referrals/rules|me|invite|list|bonuses|leaderboard`  
+Xtrapay app expects: `GET /api/v1/xtrapay/referrals/...` (same payloads).
+
+### Attribution
+
+1. **Preferred — signup**  
+   `POST /auth/register` includes optional `referralCode` (aliases: `referredBy`, `referral_code`, `referred_by`) = referrer **pay code or phone**.  
+   Backend: `WalletReferralAttributionService::attributeFromRegistration` — lock once in `wallet_referrals`.
+
+2. **Fallback**  
+   First P2P credit from someone can attribute them if none set (`attributeFromFirstP2pCredit`).
+
+### Earn (referrer)
+
+Via transaction observer (same as Checkout):
+
+| Event | Bonus |
+|-------|-------|
+| Referred user’s first top-up (above min) | % of deposit (capped) → referrer |
+| Counted spend (VTU, P2P out, bank out, merchant, …) | Milestone every N txns while window open (~6 months) |
+
+Leaderboard: separate settlement / admin command.
+
+### Example `GET /referrals/me` `200`
+
+```json
+{
+  "payCode": "XP-8034",
+  "phone": "+2348034129981",
+  "referredCount": 12,
+  "earnedTotal": 4500,
+  "pendingBonuses": 200,
+  "bonusWindowOpen": true,
+  "referredByCode": null,
+  "rank": 4
+}
+```
+
+### Example `GET /referrals/invite` `200`
+
+```json
+{
+  "payCode": "XP-8034",
+  "shareText": "Join me on Xtrapay — use my code XP-8034 when you sign up. https://xtrapay.ng/?ref=XP-8034",
+  "shareUrl": "https://xtrapay.ng/?ref=XP-8034"
+}
+```
+
+Snake_case aliases accepted throughout.
 
 ---
 

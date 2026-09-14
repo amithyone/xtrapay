@@ -29,6 +29,13 @@ function initialsFromName(name: string): string {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
+/** True when a business wallet has a usable pay-in number (not a stub). */
+function isOpenedBusinessWallet(w: WalletAccount): boolean {
+  if (w.kind !== 'business' && w.kind !== 'sub_business') return false;
+  const n = (w.accountNumber || '').trim();
+  return Boolean(n && n !== '—' && !/^pending/i.test(n));
+}
+
 export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
   const {
     activeScreen,
@@ -69,6 +76,39 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
     return w.balance;
   };
 
+  const openedBusinessWallets = useMemo(
+    () => wallets.filter(isOpenedBusinessWallet),
+    [wallets]
+  );
+  const hasOpenedBusiness = openedBusinessWallets.length > 0;
+  const switcherWallets = useMemo(
+    () =>
+      hasOpenedBusiness
+        ? wallets
+        : wallets.filter(w => w.kind !== 'business' && w.kind !== 'sub_business'),
+    [wallets, hasOpenedBusiness]
+  );
+
+  const goToOpenBusinessAccount = () => {
+    setAccountModalOpen(false);
+    try {
+      sessionStorage.setItem('xtrapay_business_accounts_intent', 'create');
+    } catch {
+      // ignore
+    }
+    setActiveScreen('business_accounts');
+    showToast(
+      'Open a business account',
+      'Create your business wallet here — name, CAC and address.',
+      'info'
+    );
+  };
+
+  const goToSupport = () => {
+    setAccountModalOpen(false);
+    setActiveScreen('support');
+  };
+
   const isSubScreen =
     showBack ||
     activeScreen === 'transfer' ||
@@ -89,6 +129,7 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
     activeScreen === 'support' ||
     activeScreen === 'network' ||
     activeScreen === 'notifications' ||
+    activeScreen === 'referrals' ||
     activeScreen === 'utility' ||
     activeScreen === 'history' ||
     activeScreen === 'statement' ||
@@ -118,6 +159,7 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
       else if (activeScreen === 'support') screenTitle = 'Support';
       else if (activeScreen === 'network') screenTitle = 'Network';
       else if (activeScreen === 'notifications') screenTitle = 'Notifications';
+      else if (activeScreen === 'referrals') screenTitle = 'Referral';
       else if (activeScreen === 'utility') screenTitle = 'Utilities & Analytics';
       else if (activeScreen === 'history') screenTitle = 'Transaction History';
       else if (activeScreen === 'statement') screenTitle = 'Statements';
@@ -168,9 +210,7 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
             </button>
             <button
               aria-label="Support Agent"
-              onClick={() =>
-                showToast('Support Agent', 'Connecting to 24/7 Xtrapay Tier-1 Concierge...', 'info')
-              }
+              onClick={goToSupport}
               className={`frosted-pad !h-8 !w-8 !min-h-8 !min-w-8 !rounded-lg ${iconTone}`}
               type="button"
             >
@@ -237,7 +277,7 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
 
             <button
               aria-label="Support Agent"
-              onClick={() => showToast('Support Agent', 'Live financial concierge connected.', 'info')}
+              onClick={goToSupport}
               className={`frosted-pad !h-8 !w-8 !min-h-8 !min-w-8 !rounded-lg cursor-pointer ${iconTone}`}
               type="button"
             >
@@ -302,7 +342,7 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
             </div>
 
             <div className="max-h-[min(60vh,26rem)] overflow-y-auto divide-y divide-[var(--glass-border)]">
-              {wallets.map(wallet => {
+              {switcherWallets.map(wallet => {
                 const active = wallet.id === selectedWallet.id;
                 const bal = displayBalance(wallet);
                 return (
@@ -333,7 +373,8 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
                         </span>
                       </div>
                       <p className="mt-1 text-[11px] text-[var(--muted)] truncate">
-                        {wallet.subtitle} · {wallet.accountNumber}
+                        {wallet.subtitle}
+                        {wallet.accountNumber ? ` · ${wallet.accountNumber}` : ''}
                       </p>
                       <p className="mt-1 text-[13px] font-mono font-semibold text-[var(--text)]">
                         ₦
@@ -349,9 +390,48 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
                   </button>
                 );
               })}
+
+              {!hasOpenedBusiness && (
+                <button
+                  type="button"
+                  onClick={goToOpenBusinessAccount}
+                  className="settings-row w-full flex items-start gap-3 px-5 py-4 text-left appearance-none border-0 cursor-pointer bg-transparent active:bg-black/[0.03] dark:active:bg-white/[0.04]"
+                >
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[var(--accent)]/12 text-[var(--accent)]">
+                    <Icon name="domain" size={18} />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-[14px] font-semibold text-[var(--text)] truncate">
+                        Business account
+                      </p>
+                      <span className="text-[9px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full border border-[var(--glass-border)] text-[var(--muted)]">
+                        Business
+                      </span>
+                    </div>
+                    <p className="mt-1 text-[11px] text-[var(--muted)]">
+                      Not opened yet — tap to create
+                    </p>
+                    <p className="mt-1 text-[12px] font-semibold text-[var(--accent)] flex items-center gap-1">
+                      Open business account
+                      <Icon name="arrow_forward" size={14} />
+                    </p>
+                  </div>
+                </button>
+              )}
             </div>
 
-            <div className="p-4 border-t border-[var(--glass-border)]">
+            <div className="p-4 border-t border-[var(--glass-border)] space-y-2">
+              {!hasOpenedBusiness && (
+                <button
+                  type="button"
+                  onClick={goToOpenBusinessAccount}
+                  className="w-full h-11 rounded-2xl bg-[var(--accent)] text-white text-[13px] font-semibold flex items-center justify-center gap-2"
+                >
+                  <Icon name="domain" size={15} />
+                  Create business account
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => {

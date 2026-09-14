@@ -45,6 +45,8 @@ import {
   apiMoneyRequests,
   apiNotifications,
   isCreditTopUpNotification,
+  isGroupSavingsNotification,
+  isMoneyRequestNotification,
   apiPots,
   apiProximityPay,
   apiRequestLoan,
@@ -732,7 +734,7 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
     }
   };
 
-  /** Soft poll for credit / top-up alerts while signed in. */
+  /** Soft poll for credit / money-request / group-savings alerts while signed in. */
   useEffect(() => {
     if (!isAuthenticated) return;
 
@@ -744,11 +746,15 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
         if (cancelled) return;
 
         const freshCredits: AppNotification[] = [];
+        const freshMoneyRequests: AppNotification[] = [];
+        const freshPots: AppNotification[] = [];
         for (const n of res.items) {
           if (!seenNotificationIds.current.has(n.id)) {
             seenNotificationIds.current.add(n.id);
-            if (announceNew && !n.read && isCreditTopUpNotification(n)) {
-              freshCredits.push(n);
+            if (announceNew && !n.read) {
+              if (isCreditTopUpNotification(n)) freshCredits.push(n);
+              else if (isMoneyRequestNotification(n)) freshMoneyRequests.push(n);
+              else if (isGroupSavingsNotification(n)) freshPots.push(n);
             }
           }
         }
@@ -770,6 +776,30 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
                 ? `${amountLabel} credited${n.body ? ` · ${n.body}` : ''}`
                 : n.body || 'Your wallet was topped up.',
               'success'
+            );
+          }
+        }
+
+        if (freshMoneyRequests.length) {
+          void refreshMoneyRequests();
+          for (const n of freshMoneyRequests) {
+            playChime('pop');
+            showToast(
+              n.title || 'Money request',
+              n.body || 'Someone asked you for money.',
+              'info'
+            );
+          }
+        }
+
+        if (freshPots.length) {
+          void refreshPots();
+          for (const n of freshPots) {
+            playChime('pop');
+            showToast(
+              n.title || 'Group savings',
+              n.body || 'Update on a group pot.',
+              'info'
             );
           }
         }

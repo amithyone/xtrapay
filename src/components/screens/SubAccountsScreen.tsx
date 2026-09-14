@@ -326,7 +326,7 @@ export const SubAccountsScreen: React.FC = () => {
         onClose={() => !busy && setPinOpen(false)}
         title="Authorize Sub-Account"
         subtitle={`Create ${kind === 'sub_business' ? 'mini business' : 'personal'} wallet under ${parentProfile.fullName}`}
-        onSuccess={pin => void handlePinSuccess(pin)}
+        onSuccess={handlePinSuccess}
       />
     </main>
   );

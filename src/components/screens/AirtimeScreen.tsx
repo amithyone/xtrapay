@@ -9,8 +9,14 @@ import {
   type VtuNetwork,
   type VtuPlan,
 } from '../../lib/xtrapayApi';
+import {
+  listVtuRecentBeneficiaries,
+  rememberVtuRecentBeneficiary,
+  type VtuRecentBeneficiary,
+} from '../../lib/vtuRecentBeneficiaries';
 import { Icon } from '../Icon';
 import { PinSheetModal } from '../common/PinSheetModal';
+import { RecentVtuBeneficiaries } from '../common/RecentVtuBeneficiaries';
 
 const FALLBACK_NETWORKS: VtuNetwork[] = [
   { id: 'mtn', label: 'MTN' },
@@ -54,6 +60,19 @@ export const TelcoTopupScreen: React.FC<{ kind: Kind }> = ({ kind }) => {
     label: string;
     balance?: number;
   } | null>(null);
+  const [recentTick, setRecentTick] = useState(0);
+
+  const recentKind = isAirtime ? 'airtime' : 'data';
+  const recentItems = useMemo(
+    () => listVtuRecentBeneficiaries(recentKind),
+    [recentKind, recentTick]
+  );
+
+  const applyRecent = (item: VtuRecentBeneficiary) => {
+    setNetworkId(item.providerId);
+    setPhone(item.account);
+    showToast('Filled from recent', `${item.providerLabel} · ${item.account}`, 'info');
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -184,6 +203,14 @@ export const TelcoTopupScreen: React.FC<{ kind: Kind }> = ({ kind }) => {
         });
         void refreshBalances();
         setPinOpen(false);
+        rememberVtuRecentBeneficiary({
+          kind: 'airtime',
+          account: phoneClean,
+          providerId: networkId,
+          providerLabel: networkLabel,
+          lastDetail: `₦${checked.amount.toLocaleString()}`,
+        });
+        setRecentTick(t => t + 1);
         setSuccess({
           amount: checked.amount,
           label: `${networkLabel} airtime`,
@@ -201,6 +228,14 @@ export const TelcoTopupScreen: React.FC<{ kind: Kind }> = ({ kind }) => {
         });
         void refreshBalances();
         setPinOpen(false);
+        rememberVtuRecentBeneficiary({
+          kind: 'data',
+          account: phoneClean,
+          providerId: networkId,
+          providerLabel: networkLabel,
+          lastDetail: plan.label,
+        });
+        setRecentTick(t => t + 1);
         setSuccess({
           amount: Number(plan.price),
           label: plan.label,
@@ -214,6 +249,9 @@ export const TelcoTopupScreen: React.FC<{ kind: Kind }> = ({ kind }) => {
         err instanceof ApiError ? err.message : 'Could not complete VTU purchase.',
         'warning'
       );
+      throw err instanceof Error
+        ? err
+        : new Error(err instanceof ApiError ? err.message : 'Purchase failed');
     } finally {
       setBusy(false);
     }
@@ -233,6 +271,8 @@ export const TelcoTopupScreen: React.FC<{ kind: Kind }> = ({ kind }) => {
           Live VTU
         </span>
       </section>
+
+      <RecentVtuBeneficiaries kind={recentKind} items={recentItems} onSelect={applyRecent} />
 
       <section className="space-y-3">
         <p className="px-0.5 text-[10px] font-medium uppercase tracking-[0.28em] text-[var(--muted)]">
@@ -401,7 +441,7 @@ export const TelcoTopupScreen: React.FC<{ kind: Kind }> = ({ kind }) => {
             ? `${networkLabel} airtime · ₦${amountStr}`
             : `${selectedPlan?.label || 'Data'} · ${networkLabel}`
         }
-        onSuccess={pin => void handlePinSuccess(pin)}
+        onSuccess={handlePinSuccess}
       />
 
       {success && (

@@ -367,7 +367,7 @@ export const NearbyPayModal: React.FC = () => {
           recipient={selectedPeer?.name}
           amount={parseFloat(amountStr.replace(/,/g, '')) || 0}
           subtitle="Direct Bluetooth LE payment"
-          onSuccess={pin => void handlePinSuccess(pin)}
+          onSuccess={handlePinSuccess}
         />
       </div>
     </div>

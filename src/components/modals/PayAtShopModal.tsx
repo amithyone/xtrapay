@@ -252,7 +252,7 @@ export const PayAtShopModal: React.FC = () => {
           recipient={selectedShop?.name}
           amount={currentAmount}
           subtitle={`Checkout Till: ${selectedShop?.terminalId}`}
-          onSuccess={pin => void handlePinSuccess(pin)}
+          onSuccess={handlePinSuccess}
         />
       </div>
     </div>

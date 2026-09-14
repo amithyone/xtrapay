@@ -59,6 +59,8 @@ import {
   Building2,
   Users,
   User,
+  UserPlus,
+  Gift,
   Banknote,
   PieChart,
   LineChart,
@@ -214,6 +216,11 @@ const ICON_MAP: Record<string, React.ComponentType<LucideProps>> = {
   group: Users,
   groups: Users,
   person: User,
+  person_add: UserPlus,
+  user_plus: UserPlus,
+  gift: Gift,
+  referral: Gift,
+  referrals: Gift,
 };
 
 export interface IconProps {

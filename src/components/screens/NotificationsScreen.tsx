@@ -6,6 +6,9 @@ import {
   apiMarkNotificationRead,
   apiNotifications,
   isCreditTopUpNotification,
+  isGroupSavingsNotification,
+  isMoneyRequestNotification,
+  notificationDeepLinkScreen,
   type AppNotification,
 } from '../../lib/xtrapayApi';
 import { Icon } from '../Icon';
@@ -13,11 +16,32 @@ import { Icon } from '../Icon';
 const money = (n: number) =>
   `₦${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+function notificationIcon(n: AppNotification): string {
+  if (isCreditTopUpNotification(n)) return 'payments';
+  if (isMoneyRequestNotification(n)) return 'request_quote';
+  if (isGroupSavingsNotification(n)) return 'groups';
+  return 'notifications';
+}
+
+function notificationTone(n: AppNotification): string {
+  if (isCreditTopUpNotification(n)) return 'bg-emerald-500/15 text-emerald-500';
+  if (isMoneyRequestNotification(n)) return 'bg-sky-500/15 text-sky-500';
+  if (isGroupSavingsNotification(n)) return 'bg-violet-500/15 text-violet-400';
+  return 'bg-[var(--accent)]/12 text-[var(--accent)]';
+}
+
 /**
- * In-app notification inbox — credits / top-ups / alerts from GET /notifications.
+ * In-app notification inbox — credits, money requests, group savings from GET /notifications.
  */
 export const NotificationsScreen: React.FC = () => {
-  const { showToast, refreshBalances, setUnreadNotificationCount } = useTransactions();
+  const {
+    showToast,
+    refreshBalances,
+    refreshMoneyRequests,
+    refreshPots,
+    setUnreadNotificationCount,
+    setActiveScreen,
+  } = useTransactions();
   const [items, setItems] = useState<AppNotification[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -45,14 +69,31 @@ export const NotificationsScreen: React.FC = () => {
     void load();
   }, [load]);
 
-  const markOne = async (n: AppNotification) => {
-    if (n.read) return;
-    try {
-      await apiMarkNotificationRead(n.id);
-      setItems(prev => prev.map(x => (x.id === n.id ? { ...x, read: true } : x)));
-      setUnreadNotificationCount(c => Math.max(0, c - 1));
-    } catch {
-      // keep unread UI
+  const openNotification = async (n: AppNotification) => {
+    if (!n.read) {
+      try {
+        await apiMarkNotificationRead(n.id);
+        setItems(prev => prev.map(x => (x.id === n.id ? { ...x, read: true } : x)));
+        setUnreadNotificationCount(c => Math.max(0, c - 1));
+      } catch {
+        // keep unread UI
+      }
+    }
+
+    const screen = notificationDeepLinkScreen(n);
+    if (screen === 'ask_money') {
+      void refreshMoneyRequests();
+      setActiveScreen('ask_money');
+      return;
+    }
+    if (screen === 'save_together') {
+      void refreshPots();
+      setActiveScreen('save_together');
+      return;
+    }
+    if (screen === 'history') {
+      void refreshBalances();
+      setActiveScreen('history');
     }
   };
 
@@ -121,7 +162,8 @@ export const NotificationsScreen: React.FC = () => {
           </span>
           <p className="text-[14px] font-semibold text-[var(--text)]">No notifications yet</p>
           <p className="text-[12px] text-[var(--muted)] leading-snug">
-            Credits, wallet top-ups and account alerts will show here when the backend posts them.
+            Credits, money requests and group savings updates will show here when the backend posts
+            them.
           </p>
         </section>
       ) : (
@@ -132,20 +174,16 @@ export const NotificationsScreen: React.FC = () => {
               <button
                 key={n.id}
                 type="button"
-                onClick={() => void markOne(n)}
+                onClick={() => void openNotification(n)}
                 className={`settings-row w-full text-left glass-card glass-strong !rounded-[22px] px-4 py-3.5 appearance-none border-0 cursor-pointer space-y-1 ${
                   n.read ? 'opacity-75' : 'ring-1 ring-[var(--accent)]/25'
                 }`}
               >
                 <div className="flex items-start gap-3">
                   <span
-                    className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${
-                      credit
-                        ? 'bg-emerald-500/15 text-emerald-500'
-                        : 'bg-[var(--accent)]/12 text-[var(--accent)]'
-                    }`}
+                    className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${notificationTone(n)}`}
                   >
-                    <Icon name={credit ? 'payments' : 'notifications'} size={18} />
+                    <Icon name={notificationIcon(n)} size={18} />
                   </span>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
@@ -160,8 +198,15 @@ export const NotificationsScreen: React.FC = () => {
                     <div className="mt-1.5 flex items-center justify-between gap-2 text-[11px] text-[var(--muted)]">
                       <span className="truncate">{n.createdAt || n.type}</span>
                       {n.amount != null && (
-                        <span className="font-mono font-semibold text-emerald-600 dark:text-emerald-400">
-                          +{money(n.amount)}
+                        <span
+                          className={`font-mono font-semibold ${
+                            credit
+                              ? 'text-emerald-600 dark:text-emerald-400'
+                              : 'text-[var(--text)]'
+                          }`}
+                        >
+                          {credit ? '+' : ''}
+                          {money(n.amount)}
                         </span>
                       )}
                     </div>

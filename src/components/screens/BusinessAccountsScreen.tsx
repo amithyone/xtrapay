@@ -54,7 +54,17 @@ export const BusinessAccountsScreen: React.FC = () => {
     refreshBalances,
   } = useTransactions();
 
-  const [view, setView] = useState<ViewMode>('list');
+  const [view, setView] = useState<ViewMode>(() => {
+    try {
+      if (sessionStorage.getItem('xtrapay_business_accounts_intent') === 'create') {
+        sessionStorage.removeItem('xtrapay_business_accounts_intent');
+        return 'create';
+      }
+    } catch {
+      // ignore
+    }
+    return 'list';
+  });
   const [loading, setLoading] = useState(true);
   const [accounts, setAccounts] = useState<WalletAccount[]>([]);
   const [pinOpen, setPinOpen] = useState(false);

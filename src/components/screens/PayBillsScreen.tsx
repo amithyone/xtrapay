@@ -13,8 +13,14 @@ import {
   type VtuCatalogItem,
   type VtuPlan,
 } from '../../lib/xtrapayApi';
+import {
+  listVtuRecentBeneficiaries,
+  rememberVtuRecentBeneficiary,
+  type VtuRecentBeneficiary,
+} from '../../lib/vtuRecentBeneficiaries';
 import { Icon } from '../Icon';
 import { PinSheetModal } from '../common/PinSheetModal';
+import { RecentVtuBeneficiaries } from '../common/RecentVtuBeneficiaries';
 
 type BillKind = 'electricity' | 'cable' | 'betting';
 
@@ -52,6 +58,19 @@ export const PayBillsScreen: React.FC = () => {
     detail: string;
     token?: string;
   } | null>(null);
+  const [recentTick, setRecentTick] = useState(0);
+
+  const recentItems = useMemo(
+    () => listVtuRecentBeneficiaries(kind),
+    [kind, recentTick]
+  );
+
+  const applyRecent = (item: VtuRecentBeneficiary) => {
+    setServiceId(item.providerId);
+    setCustomerId(item.account);
+    if (item.label) setCustomerName(item.label);
+    showToast('Filled from recent', `${item.providerLabel} · ${item.account}`, 'info');
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -106,7 +125,17 @@ export const PayBillsScreen: React.FC = () => {
       setServiceId(bettingServices[0]?.id || '');
       setAmountStr('1,000');
     }
-  }, [kind, discos, tvServices, bettingServices]);
+    // Only reset form when bill kind changes — not when catalog lists refresh.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kind]);
+
+  // Seed default provider once catalogs arrive (without wiping a recent pick).
+  useEffect(() => {
+    if (serviceId) return;
+    if (kind === 'electricity' && discos[0]) setServiceId(discos[0].id);
+    else if (kind === 'cable' && tvServices[0]) setServiceId(tvServices[0].id);
+    else if (kind === 'betting' && bettingServices[0]) setServiceId(bettingServices[0].id);
+  }, [kind, discos, tvServices, bettingServices, serviceId]);
 
   useEffect(() => {
     if (kind !== 'cable' || !serviceId) return;
@@ -239,6 +268,15 @@ export const PayBillsScreen: React.FC = () => {
         });
         void refreshBalances();
         setPinOpen(false);
+        rememberVtuRecentBeneficiary({
+          kind: 'electricity',
+          account: customerId.trim(),
+          providerId: serviceId,
+          providerLabel: serviceLabel,
+          label: customerName || undefined,
+          lastDetail: `₦${amount.toLocaleString()}`,
+        });
+        setRecentTick(t => t + 1);
         const token = res.token || res.pendingToken || undefined;
         setSuccess({
           title: 'Electricity paid',
@@ -261,6 +299,15 @@ export const PayBillsScreen: React.FC = () => {
         });
         void refreshBalances();
         setPinOpen(false);
+        rememberVtuRecentBeneficiary({
+          kind: 'cable',
+          account: customerId.trim(),
+          providerId: serviceId,
+          providerLabel: serviceLabel,
+          label: customerName || undefined,
+          lastDetail: plan.label,
+        });
+        setRecentTick(t => t + 1);
         setSuccess({
           title: 'TV subscription paid',
           detail: `${plan.label} · ₦${Number(plan.price).toLocaleString()}`,
@@ -276,6 +323,15 @@ export const PayBillsScreen: React.FC = () => {
         });
         void refreshBalances();
         setPinOpen(false);
+        rememberVtuRecentBeneficiary({
+          kind: 'betting',
+          account: customerId.trim(),
+          providerId: serviceId,
+          providerLabel: serviceLabel,
+          label: customerName || undefined,
+          lastDetail: `₦${amount.toLocaleString()}`,
+        });
+        setRecentTick(t => t + 1);
         setSuccess({
           title: 'Betting wallet funded',
           detail: `${serviceLabel} · ₦${amount.toLocaleString()}`,
@@ -288,6 +344,9 @@ export const PayBillsScreen: React.FC = () => {
         err instanceof ApiError ? err.message : 'Could not complete bill payment.',
         'warning'
       );
+      throw err instanceof Error
+        ? err
+        : new Error(err instanceof ApiError ? err.message : 'Payment failed');
     } finally {
       setBusy(false);
     }
@@ -377,6 +436,8 @@ export const PayBillsScreen: React.FC = () => {
           })}
         </div>
       </section>
+
+      <RecentVtuBeneficiaries kind={kind} items={recentItems} onSelect={applyRecent} />
 
       <section className="glass-card glass-strong !rounded-[24px] px-5 py-5 space-y-4">
         <p className="text-[13px] font-semibold text-[var(--text)]">Payment details</p>
@@ -551,7 +612,7 @@ export const PayBillsScreen: React.FC = () => {
             ? `${selectedTvPlan.label} · ₦${Number(selectedTvPlan.price).toLocaleString()}`
             : `${serviceLabel} · ₦${amountStr}`
         }
-        onSuccess={pin => void handlePinSuccess(pin)}
+        onSuccess={handlePinSuccess}
       />
 
       {success && (
