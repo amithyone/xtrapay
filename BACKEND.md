@@ -97,29 +97,106 @@ UserProfile {
 }
 ```
 
-### 3.2 Wallet
+### 3.2 Wallet & sub-accounts
 
 ```ts
 WalletAccount {
   id: string
   name: string
   kind: 'personal' | 'business' | 'sub_personal' | 'sub_business'
-  accountNumber: string
+  accountNumber: string          // NUBAN / VA
   bankName: string
-  balance: number          // NGN
-  subtitle: string
+  balance: number                // NGN
+  subtitle: string               // often = purpose for subs
+  purpose?: string
+  accountName?: string           // legal name on VA (usually parent)
+  parentWalletId?: string
+  status?: 'active' | 'frozen' | 'closed'
   currency: 'NGN'
+}
+
+// Parent profile for create screen comes from GET /me (masked KYC):
+Me {
+  fullName, phone, email, tier, customerId,
+  kyc: { status, bvnMasked, ninMasked, idType? }
 }
 ```
 
-**Current mock wallets**
+**Open business account (Tier-2 instant)** — no re-login / no re-KYC.
 
-| id | name | kind | account | bank | balance |
-|----|------|------|---------|------|---------|
-| personal | Personal account | personal | 0124892019 | Zenith Bank | 4,850,240 |
-| business | Business account | business | 2048991204 | Providus Bank | 14,250,000 |
-| sub-1 | Rent wallet | sub_personal | 0124892201 | Zenith Bank | 125,000 |
-| sub-2 | Market stall | sub_business | 2048991308 | Providus Bank | 482,450.5 |
+Requires personal **Tier 2** KYC. App sends only business fields; server copies
+name, DOB, BVN/NIN, email, phone from the personal profile. Always provision a
+**fresh** business pay-in VA via CheckoutRail (Mevon) — do **not** reuse the
+personal wallet VA (`instant_tier2` / empty VA path). Utility bills, CAC
+certificates, and address verification are **deferred** (ask later).
+
+```http
+POST /business/accounts
+{
+  "business_name": "Ajah Fresh Market Ltd",
+  "cac": "BN1234567",
+  "address": "12 Admiralty Way, Lekki",
+  "pin": "1234"
+}
+```
+
+`cac` is **mandatory** — accepts **BN** or **RC** (e.g. `BN1234567`, `RC123456`). Reject empty/invalid. Alias `businessName` may be accepted.
+
+**Response `201`** — `WalletAccount` with `kind: "business"`. `accountNumber` may
+be empty/pending while CheckoutRail queues the VA; client shows “provisioning…”.
+
+Also accepted: `GET /business/accounts` → business + mini-business wallets.
+
+**Create sub-account** — KYC inherited; do **not** require BVN/NIN again.
+
+```http
+POST /wallets
+Content-Type: application/json
+
+{
+  "kind": "sub_personal" | "sub_business",
+  "name": "Rent wallet",
+  "purpose": "Monthly rent set-aside",
+  "pin": "1234",
+  "parentContext": "personal" | "business"
+}
+```
+
+**Response `201`**
+
+```json
+{
+  "id": "sub_01H…",
+  "name": "Rent wallet",
+  "kind": "sub_personal",
+  "accountNumber": "0124892201",
+  "bankName": "Zenith Bank",
+  "balance": 0,
+  "subtitle": "Monthly rent set-aside",
+  "purpose": "Monthly rent set-aside",
+  "accountName": "INNOCENT SOLOMON",
+  "parentWalletId": "personal",
+  "status": "active",
+  "currency": "NGN"
+}
+```
+
+| Method | Path | Notes |
+|--------|------|--------|
+| GET | `/me` | Parent verified profile (masked BVN/NIN) |
+| GET | `/wallets` | All wallets incl. `sub_*` |
+| GET | `/wallets/sub-accounts` | Optional: only subs |
+| POST | `/wallets` | Create sub (`kind` = `sub_personal` \| `sub_business`) |
+| GET | `/wallets/:id` | Detail + balance |
+| PATCH | `/wallets/:id` | Optional rename / purpose |
+| DELETE | `/wallets/:id` | Optional close (balance 0) |
+| GET | `/wallets/:id/transactions` | Sub ledger |
+
+| UI field | Source |
+|----------|--------|
+| Name, Phone, BVN, NIN, Customer ID, Tier | `GET /me` |
+| List (name, kind, subtitle, accountNumber, balance) | `GET /wallets` filter `sub_*` |
+| Create type + name + purpose + PIN | `POST /wallets` |
 
 ### 3.3 Transaction
 
@@ -192,14 +269,51 @@ PotMember { id, name, phone, initials, status, contributed, share, isCreator? }
 
 ```ts
 MoneyRequest { id, type: contact|overdraft|loan, …, status, isIncoming, facilityKind?, tenor? }
+
+// GET /credit/overview
+CreditOverview {
+  overdraftLimit: number          // authorized OD line
+  overdraftUsed?: number          // drawn
+  overdraftAvailable?: number     // limit - used (optional)
+  outstandingLoans: number        // sum of open loan balances (hub header)
+  minLoanAmount?: number          // default 5000
+  interestRateFlat?: number       // 0.025 or 2.5
+  tenors?: string[]               // e.g. ["14 days","30 days","60 days","90 days"]
+}
+
+// GET /credit/loans?status=active|all|settled
 Loan {
-  id, title, principal, outstanding, dueDate, tenor, status: Active|Overdue|Settled
+  id: string
+  title: string
+  principal: number
+  outstanding: number
+  dueDate: string                 // display string ok
+  tenor: string
+  status: 'Active' | 'Overdue' | 'Settled' | 'Pending'
+  interestRate?: number
+  disbursedAt?: string
 }
-LoanCollection {
-  id, customer, phone, amount, method: Cash|Transfer|POS, date, reference, agentId?
+
+// GET /credit/repayments?loanId=
+LoanRepayment {
+  id: string
+  loanId?: string
+  loanTitle: string
+  amount: number
+  date: string
+  reference: string
+  status?: string
 }
-Overdraft { limit: number, used?: number }
+
+// POST /credit/loans/request   { amount, tenor, pin }
+// → Loan (preferred) OR MoneyRequest (pending approval)
+// POST /credit/loans/:id/repay { amount, pin }
+// → { loan?, repayment?, outstanding?, walletBalance? }
+// POST /credit/overdraft/request { amount, pin } → overview or request
+// POST /credit/overdraft/repay   { amount, pin } → overview (optional pay-down)
 ```
+
+**UI map (LoansScreen):** hub = overview + loan list; request = min/tenor/interest from overview; repay = open loans + PIN debit; “Recent repayments” = `/credit/repayments`. Overdraft request lives mainly on Ask Money → `/credit/overdraft/request`.
 
 ### 3.9 Limits
 
@@ -215,23 +329,107 @@ Limits {
 
 ### 3.10 Cards
 
+Empty `GET /cards` → UI shows **Request card only** (no mock faces).
+
 ```ts
 Card {
-  id, kind: 'physical' | 'virtual_usd'
-  last4, panMasked?, status: active|frozen|pending
-  spendAvailableNgn?, spendAvailableUsd?
-  network: visa|mastercard|verve
+  id: string
+  kind: 'physical' | 'virtual_usd'   // or type
+  last4: string
+  panMasked?: string                 // e.g. "•••• •••• •••• 1044" or spaced PAN when reveal allowed
+  status: 'active' | 'frozen' | 'pending' | 'inactive'
+  cardholderName?: string
+  expiryMonth?: string               // "MM"
+  expiryYear?: string                // "YY"
+  network?: 'visa' | 'mastercard' | 'verve'
+  spendAvailableNgn?: number         // physical (often = wallet link)
+  spendAvailableUsd?: number         // virtual USD balance
+  deliveryAddress?: string           // physical
+  billingAddress?: string            // virtual US billing block
+  cvvMasked?: string                 // only when reveal / details allowed; never full CVV in list
 }
+
+// GET /cards/request-quote?kind=physical|virtual_usd&initialTopUpUsd=
+CardRequestQuote {
+  kind: 'physical' | 'virtual_usd'
+  issuanceFeeNgn: number          // card cost charged from wallet
+  deliveryFeeNgn?: number         // physical only
+  minInitialTopUpUsd?: number     // virtual: first top-up requirement (USD)
+  initialTopUpUsd?: number        // echoed / applied USD load
+  fxRate?: number                 // NGN per 1 USD
+  topUpNgn?: number               // conversion amount for initialTopUpUsd
+  totalDebitNgn: number           // issuance + delivery + topUpNgn
+  walletBalanceNgn?: number
+  sufficientBalance?: boolean
+  title?: string
+  notes?: string[]
+}
+
+// POST /cards/request  body:
+{ kind, deliveryAddress?, initialTopUpUsd?, pin }
+// → Card (pending for physical ok; virtual may be active + funded)
+
+// POST /cards/:id/freeze  body: { frozen: boolean, pin?: string } → Card
+// POST /cards/:id/fund    body: { amountUsd: number, pin: string }
+// → { card?: Card, spendAvailableUsd?, walletBalance?, fxRate? }  // virtual only
+// POST /cards/:id/pin     body: { pin: string, newPin: string } → ok
 ```
 
 ### 3.11 Recurring
 
 ```ts
+// GET /recurring → RecurringPlan[] | { plans }
+// POST /recurring { channel, recipientName, bankName?, bankCode?, accountNumber,
+//   amount, narration?, scheduleMode: end_of_month|custom,
+//   customCadence?, dayOfMonth?, everyNDays?, pin } → RecurringPlan
+// PATCH /recurring/:id { active } → RecurringPlan
+// DELETE /recurring/:id
+// GET /recurring/runs | /recurring/:id/runs → RecurringRun[]
+
 RecurringPlan {
   id, recipientName, bankName, accountNumber, amount, narration,
   scheduleLabel, nextRun, active, walletId?
 }
-RecurringRun { id, planId, recipientName, amount, status, date, time, reference }
+RecurringRun { id, planId, recipientName, amount, status: Successful|Failed|Pending, date, time, reference }
+```
+
+### 3.11b Analytics · Settlement · Statements · X-Points
+
+```ts
+// GET /analytics/cashflow?context=personal|business&periodDays=30|90|365
+CashflowAnalytics {
+  healthLabel, healthScorePct, marginPct, netBalance,
+  burnPerDay, runwayDays,
+  totalInflow, totalOutflow, inflowCount, outflowCount, inflowChangePct,
+  channels: [{ label, pct, amount }],
+  velocityAvgPerDay,
+  velocityDays: [{ day, amount, heightPct? }],
+  categories: [{ label, amount, pct, icon? }]
+}
+
+// GET /settlement/overview
+SettlementOverview {
+  pendingAmount, availableForSettlement,
+  nextWindowLabel, cutOffLabel?, destinationSummary?,
+  minInstantAmount?, instantFeeNgn?,
+  banks: [{ id, bankName, accountNumber, accountName?, sharePct? }],
+  recent: [{ id, reference, amount, status, bankName, postedAt|date }]
+}
+// GET /settlement/batches
+// POST /settlement/instant { amount, pin, bankId? } → { batch?, reference?, feeNgn? }
+
+// POST /statements
+{ kind: wallet|savings|card|pos|business, period: '7'|'30'|'90'|'365',
+  format: pdf|csv, posId?, context? }
+→ { downloadUrl|url, fileName?, expiresAt? }
+
+// GET /xpoints
+XPointsSummary {
+  available, pending, redeemed, total?,
+  commissionEarned, xpToNaira, rateLabel?,
+  history|ledger: [{ id, title, meta, amount, xPoints, commission, when, status }]
+}
+// POST /xpoints/redeem { channel: wallet|airtime|data|commission, amount, pin, phone? }
 ```
 
 ### 3.12 Support & network
@@ -290,9 +488,13 @@ Frontend flow today: Intro (client) → Login / Register(basic) → KYC → OTP 
 |--------|------|---------|
 | GET | `/me` | Profile |
 | PATCH | `/me` | Update name/email/phone/address/prefs |
-| GET | `/wallets` | List wallets |
-| POST | `/wallets` | Create sub-account |
+| GET | `/wallets` | List wallets (incl. sub_*) |
+| POST | `/wallets` | Create sub-account `{ kind, name, purpose, pin }` |
+| GET | `/wallets/sub-accounts` | Optional: sub accounts only |
+| GET | `/business/accounts` | List business wallets |
+| POST | `/business/accounts` | Tier-2 instant: `{ business_name, cac, address, pin }` — KYC from personal; fresh Mevon VA |
 | GET | `/wallets/:id` | Detail + balance |
+| PATCH | `/wallets/:id` | Rename / purpose (optional) |
 | GET | `/wallets/:id/transactions` | Ledger (`category`, `from`, `to`, cursor) |
 | GET | `/transactions` | Cross-wallet history |
 | GET | `/transactions/:id` | Receipt payload |
@@ -326,16 +528,37 @@ Frontend flow today: Intro (client) → Login / Register(basic) → KYC → OTP 
 
 ## 7. POS / terminals
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/terminals` | Mapped devices |
+No mock seeds — empty `GET /terminals` → empty list UI.
+
+```ts
+Terminal {
+  id, terminalId, serialNumber, name, model, address,
+  status: Active|Offline|Locked|Inactive|Pending,
+  balance, dateMapped,
+  lastTransaction: { label, at },
+  pendingAddress?, addressRequestStatus?: None|Pending|Approved|Rejected
+}
+TerminalTx {
+  id, terminalId, type, amount,
+  status: Successful|Failed|Pending|Reversed|Declined,
+  reference, date, time, commission?, xPoints?
+}
+```
+
+| Method | Path | Body / response |
+|--------|------|-----------------|
+| GET | `/terminals` | `Terminal[]` \| `{ terminals }` |
 | GET | `/terminals/:id` | Detail |
-| GET | `/terminals/:id/transactions` | POS txs |
-| POST | `/terminals/:id/fund` | Push float |
-| POST | `/terminals/sweep` | `{ terminalIds: 'all' \| string[], amount? }` + PIN |
-| POST | `/terminals/:id/lock` | Lock |
-| POST | `/terminals/:id/unlock` | Unlock |
-| POST | `/terminals/:id/address-request` | Update address |
+| PATCH | `/terminals/:id` | `{ name }` rename |
+| GET | `/terminals/:id/transactions` | POS ledger |
+| GET | `/terminals/:id/xpoints` | `{ total, available, pending, redeemed, commission }` |
+| POST | `/terminals/:id/fund` | `{ amount, pin }` → `{ terminal?, balance?, reference?, walletBalance? }` |
+| POST | `/terminals/:id/withdraw` | `{ amount, pin? }` → same shape |
+| POST | `/terminals/sweep` | `{ terminalIds: 'all' \| string[], amount?, pin }` |
+| POST | `/terminals/:id/lock` | → Terminal |
+| POST | `/terminals/:id/unlock` | `{ pin }` → Terminal |
+| POST | `/terminals/:id/address-request` | `{ address, reason }` → Terminal |
+| POST | `/terminals/:id/support` | `{ type, note?, transactionId? }` → `{ ticketId?, status? }` |
 
 
 
@@ -343,10 +566,13 @@ Frontend flow today: Intro (client) → Login / Register(basic) → KYC → OTP 
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/credit/overview` | Outstanding, overdraft limit |
-| GET | `/credit/loans` | Active loans |
-| POST | `/credit/loans/request` | `{ amount, tenor }` + PIN → disburse |
-| POST | `/credit/loans/:id/repay` | Repay own loan from wallet + PIN |
+| GET | `/credit/overview` | OD limit/used + outstanding + loan rules |
+| GET | `/credit/loans` | `?status=` active/settled/all |
+| POST | `/credit/loans/request` | `{ amount, tenor, pin }` → Loan or request |
+| POST | `/credit/loans/:id/repay` | `{ amount, pin }` from wallet |
+| GET | `/credit/repayments` | `?loanId=` repayment history |
+| POST | `/credit/overdraft/request` | `{ amount, pin }` extend OD line |
+| POST | `/credit/overdraft/repay` | `{ amount, pin }` pay down used (optional) |
 | GET | `/credit/collections` | *(optional agent)* collection log |
 | POST | `/credit/collections` | *(optional agent)* record collection + PIN |
 | GET | `/limits` | Caps + dailySpent |
@@ -358,22 +584,29 @@ Frontend flow today: Intro (client) → Login / Register(basic) → KYC → OTP 
 
 ---
 
-## 9. Cards, recurring, statements, X-Points
+## 9. Cards, recurring, statements, X-Points, analytics, settlement
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/cards` | Physical + virtual |
-| POST | `/cards/request` | Request card |
-| POST | `/cards/:id/freeze` | Freeze/unfreeze |
+| GET | `/cards` | List user cards (empty = no active card) |
+| GET | `/cards/request-quote` | `?kind=&initialTopUpUsd=` → fees + FX summary |
+| POST | `/cards/request` | `{ kind, deliveryAddress?, initialTopUpUsd?, pin }` → Card |
+| POST | `/cards/:id/freeze` | `{ frozen, pin? }` → Card |
+| POST | `/cards/:id/fund` | Virtual USD: `{ amountUsd, pin }` |
 | POST | `/cards/:id/pin` | Set/change card PIN |
 | GET | `/recurring` | Plans |
-| POST | `/recurring` | Create |
-| PATCH | `/recurring/:id` | Pause/resume |
+| POST | `/recurring` | Create schedule + PIN |
+| PATCH | `/recurring/:id` | Pause/resume `{ active }` |
 | DELETE | `/recurring/:id` | Delete |
-| GET | `/recurring/:id/runs` | History |
-| POST | `/statements` | `{ kind, period, format: pdf\|csv, posId? }` → download URL |
-| GET | `/xpoints` | Balance + history |
-| POST | `/xpoints/redeem` | `{ channel, amount }` |
+| GET | `/recurring/runs` | All run history |
+| GET | `/recurring/:id/runs` | Per-plan history |
+| POST | `/statements` | `{ kind, period, format, posId?, context? }` → download URL |
+| GET | `/analytics/cashflow` | `?context=&periodDays=` Utility metrics |
+| GET | `/settlement/overview` | Pending, window, banks, recent batches |
+| GET | `/settlement/batches` | Settlement history |
+| POST | `/settlement/instant` | `{ amount, pin, bankId? }` instant payout |
+| GET | `/xpoints` | Balance + commission + ledger |
+| POST | `/xpoints/redeem` | `{ channel, amount, pin }` |
 
 ---
 

@@ -1,12 +1,24 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTransactions } from '../../context/TransactionContext';
+import { ApiError } from '../../lib/api';
+import {
+  apiFundTerminal,
+  apiLockTerminal,
+  apiRenameTerminal,
+  apiSweepTerminals,
+  apiTerminalAddressRequest,
+  apiTerminalSupport,
+  apiTerminalTransactions,
+  apiTerminalXPoints,
+  apiTerminals,
+  apiUnlockTerminal,
+  apiVerifyPin,
+  apiWithdrawTerminal,
+  mapApiTerminal,
+} from '../../lib/xtrapayApi';
 import { Icon } from '../Icon';
 import { PinSheetModal } from '../common/PinSheetModal';
-import {
-  INITIAL_TERMINALS,
-  INITIAL_TERMINAL_TXS,
-  SUPPORT_TX_TYPES,
-} from '../../data/terminals';
+import { SUPPORT_TX_TYPES } from '../../data/terminals';
 import type { Terminal, TerminalStatus, TerminalTx } from '../../types';
 
 type SheetKind =
@@ -54,10 +66,12 @@ const money = (n: number) =>
  * Spec: Terminal → My Terminals → Details → Fund / Withdraw / … / Support
  */
 export const TerminalScreen: React.FC = () => {
-  const { personalBalance, showToast, theme } = useTransactions();
+  const { personalBalance, showToast, theme, refreshBalances, userProfile, setActiveScreen, posManagementUnlocked, unlockPosManagement } =
+    useTransactions();
   const isLight = theme === 'light';
 
-  const [terminals, setTerminals] = useState<Terminal[]>(INITIAL_TERMINALS);
+  const [terminals, setTerminals] = useState<Terminal[]>([]);
+  const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [sheet, setSheet] = useState<SheetKind>(null);
   const [renameValue, setRenameValue] = useState('');
@@ -68,12 +82,24 @@ export const TerminalScreen: React.FC = () => {
   const [supportNote, setSupportNote] = useState('');
   const [attachTxId, setAttachTxId] = useState<string | null>(null);
   const [historyFilter, setHistoryFilter] = useState<'All' | TerminalTx['status']>('All');
+  const [allTxs, setAllTxs] = useState<TerminalTx[]>([]);
+  const [xPointsSummary, setXPointsSummary] = useState({
+    total: 0,
+    available: 0,
+    pending: 0,
+    redeemed: 0,
+    commission: 0,
+  });
   const [unlockPinOpen, setUnlockPinOpen] = useState(false);
+  const [pendingUnlockId, setPendingUnlockId] = useState<string | null>(null);
   const [sweepPageOpen, setSweepPageOpen] = useState(false);
   const [sweepTarget, setSweepTarget] = useState<'all' | string>('all');
   const [sweepPinOpen, setSweepPinOpen] = useState(false);
   const [fundPinOpen, setFundPinOpen] = useState(false);
+  const [withdrawPinOpen, setWithdrawPinOpen] = useState(false);
   const [pendingFundAmount, setPendingFundAmount] = useState(0);
+  const [pendingWithdrawAmount, setPendingWithdrawAmount] = useState(0);
+  const [busy, setBusy] = useState(false);
   const [fundSuccess, setFundSuccess] = useState<{
     amount: number;
     terminalName: string;
@@ -82,7 +108,59 @@ export const TerminalScreen: React.FC = () => {
     newBalance: number;
   } | null>(null);
 
+  const loadTerminals = useCallback(async () => {
+    try {
+      const list = await apiTerminals();
+      setTerminals(list);
+    } catch {
+      setTerminals([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadTerminals();
+  }, [loadTerminals]);
+
   const selected = terminals.find(t => t.id === selectedId) ?? null;
+  const unlockTarget =
+    terminals.find(t => t.id === (pendingUnlockId || selectedId)) ?? selected;
+
+  const loadSelectedSideData = useCallback(async (term: Terminal) => {
+    try {
+      const txs = await apiTerminalTransactions(term.id);
+      setAllTxs(txs);
+    } catch {
+      setAllTxs([]);
+    }
+    try {
+      const xp = await apiTerminalXPoints(term.id);
+      setXPointsSummary({
+        total: Number(xp.total ?? 0),
+        available: Number(xp.available ?? 0),
+        pending: Number(xp.pending ?? 0),
+        redeemed: Number(xp.redeemed ?? 0),
+        commission: Number(xp.commission ?? 0),
+      });
+    } catch {
+      setXPointsSummary({
+        total: 0,
+        available: 0,
+        pending: 0,
+        redeemed: 0,
+        commission: 0,
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!selected) {
+      setAllTxs([]);
+      return;
+    }
+    void loadSelectedSideData(selected);
+  }, [selected?.id, loadSelectedSideData]);
 
   const stats = useMemo(() => {
     const total = terminals.length;
@@ -95,25 +173,12 @@ export const TerminalScreen: React.FC = () => {
 
   const terminalTxs = useMemo(() => {
     if (!selected) return [];
-    return INITIAL_TERMINAL_TXS.filter(tx => tx.terminalId === selected.terminalId).filter(
-      tx => historyFilter === 'All' || tx.status === historyFilter
+    return allTxs.filter(
+      tx =>
+        (tx.terminalId === selected.terminalId || tx.terminalId === selected.id) &&
+        (historyFilter === 'All' || tx.status === historyFilter)
     );
-  }, [selected, historyFilter]);
-
-  const xPointsSummary = useMemo(() => {
-    const rows = INITIAL_TERMINAL_TXS.filter(
-      tx => selected && tx.terminalId === selected.terminalId
-    );
-    const earned = rows.reduce((s, t) => s + (t.xPoints || 0), 0);
-    const commission = rows.reduce((s, t) => s + (t.commission || 0), 0);
-    return {
-      total: earned + 420,
-      available: earned + 280,
-      pending: 86,
-      redeemed: 54,
-      commission,
-    };
-  }, [selected]);
+  }, [selected, historyFilter, allTxs]);
 
   const openSheet = (kind: SheetKind) => {
     if (!selected) return;
@@ -138,28 +203,46 @@ export const TerminalScreen: React.FC = () => {
     setTerminals(prev => prev.map(t => (t.id === id ? { ...t, ...patch } : t)));
   };
 
-  const handleRename = () => {
+  const handleRename = async () => {
     if (!selected || !renameValue.trim()) return;
-    patchTerminal(selected.id, { name: renameValue.trim() });
-    showToast('Terminal Renamed', `${selected.terminalId} is now “${renameValue.trim()}”.`);
-    closeSheet();
+    try {
+      const updated = await apiRenameTerminal(selected.id, renameValue.trim());
+      patchTerminal(selected.id, updated);
+      showToast('Terminal Renamed', `${selected.terminalId} is now “${updated.name}”.`);
+      closeSheet();
+    } catch (err) {
+      showToast(
+        'Rename failed',
+        err instanceof ApiError ? err.message : 'Could not rename terminal.',
+        'warning'
+      );
+    }
   };
 
-  const handleAddressRequest = () => {
+  const handleAddressRequest = async () => {
     if (!selected || !newAddress.trim() || !addressReason.trim()) {
       showToast('Missing Details', 'Enter the new address and a reason.', 'warning');
       return;
     }
-    patchTerminal(selected.id, {
-      pendingAddress: newAddress.trim(),
-      addressRequestStatus: 'Pending',
-    });
-    showToast(
-      'Address Request Submitted',
-      'Admin/Operations will review before the official address updates.',
-      'info'
-    );
-    closeSheet();
+    try {
+      const updated = await apiTerminalAddressRequest(selected.id, {
+        address: newAddress.trim(),
+        reason: addressReason.trim(),
+      });
+      patchTerminal(selected.id, updated);
+      showToast(
+        'Address Request Submitted',
+        'Admin/Operations will review before the official address updates.',
+        'info'
+      );
+      closeSheet();
+    } catch (err) {
+      showToast(
+        'Request failed',
+        err instanceof ApiError ? err.message : 'Could not submit address request.',
+        'warning'
+      );
+    }
   };
 
   const handleFund = () => {
@@ -177,22 +260,37 @@ export const TerminalScreen: React.FC = () => {
     setFundPinOpen(true);
   };
 
-  const handleFundPinSuccess = () => {
+  const handleFundPinSuccess = async (pin: string) => {
     if (!selected || pendingFundAmount <= 0) return;
     const amt = pendingFundAmount;
-    const reference = `XTF-${Date.now().toString().slice(-8)}`;
-    const newBalance = selected.balance + amt;
-    patchTerminal(selected.id, { balance: newBalance });
-    setFundPinOpen(false);
-    setPendingFundAmount(0);
-    closeSheet();
-    setFundSuccess({
-      amount: amt,
-      terminalName: selected.name,
-      terminalId: selected.terminalId,
-      reference,
-      newBalance,
-    });
+    setBusy(true);
+    try {
+      const res = await apiFundTerminal(selected.id, { amount: amt, pin });
+      const newBalance =
+        res.balance ??
+        (res.terminal ? mapApiTerminal(res.terminal).balance : selected.balance + amt);
+      if (res.terminal) patchTerminal(selected.id, mapApiTerminal(res.terminal));
+      else patchTerminal(selected.id, { balance: newBalance });
+      void refreshBalances();
+      setFundPinOpen(false);
+      setPendingFundAmount(0);
+      closeSheet();
+      setFundSuccess({
+        amount: amt,
+        terminalName: selected.name,
+        terminalId: selected.terminalId,
+        reference: res.reference || `XTF-${Date.now().toString().slice(-8)}`,
+        newBalance,
+      });
+    } catch (err) {
+      showToast(
+        'Fund failed',
+        err instanceof ApiError ? err.message : 'Could not fund terminal.',
+        'warning'
+      );
+    } finally {
+      setBusy(false);
+    }
   };
 
   const handleWithdraw = () => {
@@ -206,31 +304,116 @@ export const TerminalScreen: React.FC = () => {
       showToast('Insufficient Terminal Float', 'Amount exceeds terminal balance.', 'warning');
       return;
     }
-    patchTerminal(selected.id, { balance: selected.balance - amt });
-    showToast(
-      'Withdrawn to Wallet',
-      `${money(amt)} returned to your Xtrapay wallet.`
-    );
-    closeSheet();
+    setPendingWithdrawAmount(amt);
+    setWithdrawPinOpen(true);
   };
 
-  const handleLockToggle = () => {
+  const handleWithdrawPinSuccess = async (pin: string) => {
+    if (!selected || pendingWithdrawAmount <= 0) return;
+    const amt = pendingWithdrawAmount;
+    setBusy(true);
+    try {
+      const res = await apiWithdrawTerminal(selected.id, { amount: amt, pin });
+      if (res.terminal) patchTerminal(selected.id, mapApiTerminal(res.terminal));
+      else patchTerminal(selected.id, { balance: Math.max(0, selected.balance - amt) });
+      void refreshBalances();
+      setWithdrawPinOpen(false);
+      setPendingWithdrawAmount(0);
+      showToast('Withdrawn to Wallet', `${money(amt)} returned to your Xtrapay wallet.`);
+      closeSheet();
+    } catch (err) {
+      showToast(
+        'Withdraw failed',
+        err instanceof ApiError ? err.message : 'Could not withdraw float.',
+        'warning'
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleLockToggle = async () => {
     if (!selected) return;
     if (selected.status === 'Locked') {
+      if (userProfile && userProfile.pinSet === false) {
+        showToast(
+          'Set transaction PIN',
+          'Create your 4-digit PIN in Profile before unlocking a POS.',
+          'warning'
+        );
+        closeSheet();
+        setActiveScreen('profile');
+        return;
+      }
+      setPendingUnlockId(selected.id);
       setUnlockPinOpen(true);
       return;
     }
-    patchTerminal(selected.id, { status: 'Locked' });
-    showToast('Terminal Locked', `${selected.name} is locked for security.`, 'warning');
-    closeSheet();
+    try {
+      const updated = await apiLockTerminal(selected.id);
+      patchTerminal(selected.id, updated);
+      showToast('Terminal Locked', `${selected.name} is locked for security.`, 'warning');
+      closeSheet();
+    } catch (err) {
+      showToast(
+        'Lock failed',
+        err instanceof ApiError ? err.message : 'Could not lock terminal.',
+        'warning'
+      );
+    }
   };
 
-  const handleUnlockSuccess = () => {
-    if (!selected) return;
-    patchTerminal(selected.id, { status: 'Active' });
-    setUnlockPinOpen(false);
-    closeSheet();
-    showToast('Terminal Unlocked', `${selected.name} is active again.`);
+  const handleUnlockSuccess = async (pin: string) => {
+    const target = unlockTarget;
+    if (!target) return false;
+    if (!/^\d{4}$/.test(pin)) {
+      showToast('Invalid PIN', 'Enter the 4-digit transaction PIN you set.', 'warning');
+      throw new ApiError('Enter a 4-digit PIN.', 422);
+    }
+    setBusy(true);
+    try {
+      await apiVerifyPin(pin);
+      const updated = await apiUnlockTerminal(target.id, pin);
+      if (updated.status === 'Locked') {
+        showToast('Unlock failed', 'Terminal is still locked. Check your PIN.', 'warning');
+        throw new ApiError('Invalid PIN', 422);
+      }
+      patchTerminal(target.id, updated);
+      setUnlockPinOpen(false);
+      setPendingUnlockId(null);
+      closeSheet();
+      setSelectedId(target.id);
+      showToast('Terminal Unlocked', `${target.name} is active again.`);
+      return true;
+    } catch (err) {
+      const body =
+        err instanceof ApiError && err.body && typeof err.body === 'object'
+          ? (err.body as { data?: { pinSet?: boolean }; pinSet?: boolean })
+          : null;
+      const pinSet = body?.data?.pinSet ?? body?.pinSet;
+      if (
+        pinSet === false ||
+        (err instanceof ApiError && /not set|no pin|pin not/i.test(err.message))
+      ) {
+        showToast(
+          'Set transaction PIN',
+          'Create your 4-digit PIN in Profile before unlocking a POS.',
+          'warning'
+        );
+        setUnlockPinOpen(false);
+        setPendingUnlockId(null);
+        setActiveScreen('profile');
+        throw err instanceof Error ? err : new Error('PIN not set');
+      }
+      showToast(
+        'Unlock failed',
+        err instanceof ApiError ? err.message : 'Wrong PIN or unlock unavailable.',
+        'warning'
+      );
+      throw err instanceof Error ? err : new Error('Invalid PIN');
+    } finally {
+      setBusy(false);
+    }
   };
 
   const terminalsWithFloat = useMemo(
@@ -269,37 +452,72 @@ export const TerminalScreen: React.FC = () => {
     setSweepPinOpen(true);
   };
 
-  const handleSweepSuccess = () => {
+  const handleSweepSuccess = async (pin: string) => {
     const swept = sweepAmount;
     const target = sweepTarget;
-    setTerminals(prev =>
-      prev.map(t => {
-        if (target === 'all') return { ...t, balance: 0 };
-        if (t.id === target) return { ...t, balance: 0 };
-        return t;
-      })
-    );
-    setSweepPinOpen(false);
-    setSweepPageOpen(false);
-    showToast(
-      'POS Sweep Complete',
-      target === 'all'
-        ? `${money(swept)} withdrawn from all terminals to your Xtrapay wallet.`
-        : `${money(swept)} withdrawn from ${sweepLabel} to your Xtrapay wallet.`
-    );
+    setBusy(true);
+    try {
+      const res = await apiSweepTerminals({
+        terminalIds: target === 'all' ? 'all' : [target],
+        pin,
+      });
+      if (res.terminals?.length) {
+        const mapped = res.terminals.map(mapApiTerminal);
+        setTerminals(prev => {
+          const byId = new Map(mapped.map(t => [t.id, t]));
+          return prev.map(t => byId.get(t.id) ?? (target === 'all' || t.id === target ? { ...t, balance: 0 } : t));
+        });
+      } else {
+        setTerminals(prev =>
+          prev.map(t => {
+            if (target === 'all') return { ...t, balance: 0 };
+            if (t.id === target) return { ...t, balance: 0 };
+            return t;
+          })
+        );
+      }
+      void refreshBalances();
+      setSweepPinOpen(false);
+      setSweepPageOpen(false);
+      showToast(
+        'POS Sweep Complete',
+        target === 'all'
+          ? `${money(res.swept ?? swept)} withdrawn from all terminals to your Xtrapay wallet.`
+          : `${money(res.swept ?? swept)} withdrawn from ${sweepLabel} to your Xtrapay wallet.`
+      );
+    } catch (err) {
+      showToast(
+        'Sweep failed',
+        err instanceof ApiError ? err.message : 'Could not sweep POS float.',
+        'warning'
+      );
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const handleSupportSubmit = () => {
+  const handleSupportSubmit = async () => {
     if (!selected) return;
-    const ticket = `TKT-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${String(
-      Math.floor(Math.random() * 900000) + 100000
-    ).slice(0, 6)}`;
-    showToast(
-      'Support Ticket Opened',
-      `${ticket} · ${supportType} · Status: Open`,
-      'info'
-    );
-    closeSheet();
+    try {
+      const res = await apiTerminalSupport(selected.id, {
+        type: supportType,
+        note: supportNote || undefined,
+        transactionId: attachTxId || undefined,
+      });
+      const ticket = res.ticketId || res.reference || 'Ticket';
+      showToast(
+        'Support Ticket Opened',
+        `${ticket} · ${supportType} · Status: ${res.status || 'Open'}`,
+        'info'
+      );
+      closeSheet();
+    } catch (err) {
+      showToast(
+        'Support failed',
+        err instanceof ApiError ? err.message : 'Could not open support ticket.',
+        'warning'
+      );
+    }
   };
 
   const padDigit = (d: string) => {
@@ -316,6 +534,43 @@ export const TerminalScreen: React.FC = () => {
       return next.length === 0 ? '0' : next;
     });
   };
+
+  if (!posManagementUnlocked) {
+    return (
+      <main className="flex-1 min-w-0 px-5 pt-5 pb-32 space-y-4" id="terminal-screen">
+        <header className="glass-card glass-strong !rounded-[24px] px-4 py-3.5">
+          <p className="text-[10px] uppercase tracking-[0.24em] text-[var(--muted)]">
+            Agent terminal management
+          </p>
+          <h1 className="mt-1.5 text-[18px] font-semibold text-[var(--text)] tracking-tight">
+            PIN required
+          </h1>
+          <p className="mt-1 text-[12px] text-[var(--muted)] leading-snug">
+            Enter your set transaction PIN to open POS management (same from Home or Services).
+          </p>
+        </header>
+        <PinSheetModal
+          isOpen
+          onClose={() => setActiveScreen('services')}
+          title="Enter Security PIN"
+          subtitle="Authenticate to open Terminal Management"
+          onSuccess={async pin => {
+            const ok = await unlockPosManagement(pin);
+            if (!ok) throw new Error('Invalid PIN');
+            return true;
+          }}
+        />
+      </main>
+    );
+  }
+
+  if (loading && !selected && !sweepPageOpen) {
+    return (
+      <main className="flex-1 min-w-0 px-5 pt-5 pb-32" id="terminal-screen">
+        <p className="text-[13px] text-[var(--muted)] text-center py-16">Loading terminals…</p>
+      </main>
+    );
+  }
 
   /* ───────── Sweep POS page ───────── */
   if (sweepPageOpen && !selected) {
@@ -472,7 +727,7 @@ export const TerminalScreen: React.FC = () => {
               ? 'All POS'
               : terminals.find(t => t.id === sweepTarget)?.terminalId
           }
-          onSuccess={handleSweepSuccess}
+          onSuccess={pin => void handleSweepSuccess(pin)}
         />
       </main>
     );
@@ -548,11 +803,40 @@ export const TerminalScreen: React.FC = () => {
           <p className="px-1 text-[10px] font-medium uppercase tracking-[0.28em] text-[var(--muted)]">
             Mapped terminals · {terminals.length}
           </p>
-          {terminals.map(t => (
+          {terminals.length === 0 ? (
+            <section className="glass-card glass-strong settings-list !rounded-[24px] px-5 py-10 text-center space-y-3">
+              <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-[var(--accent)]/12 text-[var(--accent)]">
+                <Icon name="point_of_sale" size={22} />
+              </span>
+              <div>
+                <p className="text-[14px] font-semibold text-[var(--text)]">No terminals mapped</p>
+                <p className="mt-1 text-[12px] text-[var(--muted)] leading-snug">
+                  When Ops maps a POS to your agent profile, it will show here.
+                </p>
+              </div>
+            </section>
+          ) : (
+          terminals.map(t => (
             <button
               key={t.id}
               type="button"
-              onClick={() => setSelectedId(t.id)}
+              onClick={() => {
+                if (t.status === 'Locked') {
+                  if (userProfile && userProfile.pinSet === false) {
+                    showToast(
+                      'Set transaction PIN',
+                      'Create your 4-digit PIN in Profile before unlocking a POS.',
+                      'warning'
+                    );
+                    setActiveScreen('profile');
+                    return;
+                  }
+                  setPendingUnlockId(t.id);
+                  setUnlockPinOpen(true);
+                  return;
+                }
+                setSelectedId(t.id);
+              }}
               className="glass-card glass-strong w-full !rounded-[24px] px-4 py-4 text-left active:scale-[0.99] transition-transform"
             >
               <div className="flex items-start justify-between gap-3">
@@ -598,8 +882,21 @@ export const TerminalScreen: React.FC = () => {
                 </div>
               </div>
             </button>
-          ))}
+          ))
+          )}
         </section>
+
+        <PinSheetModal
+          isOpen={unlockPinOpen}
+          onClose={() => {
+            if (busy) return;
+            setUnlockPinOpen(false);
+            setPendingUnlockId(null);
+          }}
+          title="Unlock Terminal"
+          subtitle={`Enter your set transaction PIN to unlock ${unlockTarget?.name ?? 'POS'}`}
+          onSuccess={pin => handleUnlockSuccess(pin)}
+        />
       </main>
     );
   }
@@ -837,7 +1134,7 @@ export const TerminalScreen: React.FC = () => {
               </p>
             </div>
             <div className="space-y-2 max-h-48 overflow-y-auto">
-              {INITIAL_TERMINAL_TXS.filter(tx => tx.terminalId === selected.terminalId).map(tx => (
+              {allTxs.filter(tx => tx.terminalId === selected.terminalId || tx.terminalId === selected.id).map(tx => (
                 <div
                   key={tx.id}
                   className="flex items-center justify-between gap-2 rounded-xl border border-[var(--glass-border)] px-3 py-2.5"
@@ -931,7 +1228,7 @@ export const TerminalScreen: React.FC = () => {
             />
             <p className="text-[12px] text-[var(--muted)] leading-relaxed">
               {selected.status === 'Locked'
-                ? 'Unlocking requires your wallet PIN. Transactions will resume per TMS rules.'
+                ? 'Unlocking requires your set transaction PIN (the same PIN from Create PIN / Profile). Face ID cannot bypass it.'
                 : 'Lock for loss, theft, security concern or temporary non-use. Transactions will be restricted.'}
             </p>
             <button type="button" onClick={handleLockToggle} className="glass-cta w-full">
@@ -985,7 +1282,7 @@ export const TerminalScreen: React.FC = () => {
                 className={fieldClass}
               >
                 <option value="">No receipt attached</option>
-                {INITIAL_TERMINAL_TXS.filter(tx => tx.terminalId === selected.terminalId).map(
+                {allTxs.filter(tx => tx.terminalId === selected.terminalId || tx.terminalId === selected.id).map(
                   tx => (
                     <option key={tx.id} value={tx.id}>
                       {tx.reference} · {tx.type} · {money(tx.amount)}
@@ -1017,15 +1314,28 @@ export const TerminalScreen: React.FC = () => {
         subtitle={`Fund ${selected.name} from your wallet`}
         amount={pendingFundAmount}
         recipient={selected.terminalId}
-        onSuccess={handleFundPinSuccess}
+        onSuccess={pin => void handleFundPinSuccess(pin)}
+      />
+
+      <PinSheetModal
+        isOpen={withdrawPinOpen}
+        onClose={() => !busy && setWithdrawPinOpen(false)}
+        title="Confirm Withdrawal"
+        subtitle={selected ? `Withdraw ${money(pendingWithdrawAmount)} from ${selected.name}` : 'Withdraw float'}
+        amount={pendingWithdrawAmount || undefined}
+        onSuccess={pin => void handleWithdrawPinSuccess(pin)}
       />
 
       <PinSheetModal
         isOpen={unlockPinOpen}
-        onClose={() => setUnlockPinOpen(false)}
+        onClose={() => {
+          if (busy) return;
+          setUnlockPinOpen(false);
+          setPendingUnlockId(null);
+        }}
         title="Unlock Terminal"
-        subtitle={`Authorize unlock for ${selected.name}`}
-        onSuccess={handleUnlockSuccess}
+        subtitle={`Enter your set transaction PIN to unlock ${unlockTarget?.name ?? 'POS'}`}
+        onSuccess={pin => handleUnlockSuccess(pin)}
       />
 
       {fundSuccess && (

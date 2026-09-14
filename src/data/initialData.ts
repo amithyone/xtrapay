@@ -144,6 +144,20 @@ export const INITIAL_BENEFICIARIES: Beneficiary[] = [
 
 export const BILLER_CATEGORIES: BillerCategory[] = [
   {
+    id: 'airtime',
+    name: 'Airtime',
+    icon: 'smartphone',
+    subtitle: 'MTN · Airtel · Glo · 9mobile',
+    active: true,
+  },
+  {
+    id: 'data',
+    name: 'Data',
+    icon: 'sim_card',
+    subtitle: 'Mobile data bundles',
+    active: true,
+  },
+  {
     id: 'electricity',
     name: 'Electricity',
     icon: 'bolt',
@@ -158,15 +172,9 @@ export const BILLER_CATEGORIES: BillerCategory[] = [
   },
   {
     id: 'internet',
-    name: 'Internet',
+    name: 'Broadband',
     icon: 'wifi',
     subtitle: 'Spectranet, Starlink',
-  },
-  {
-    id: 'data',
-    name: 'Mobile Data',
-    icon: 'sim_card',
-    subtitle: 'Airtime & bundles',
   },
   {
     id: 'betting',

@@ -1,68 +1,47 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTransactions } from '../../context/TransactionContext';
+import { ApiError } from '../../lib/api';
+import {
+  apiCreditLoans,
+  apiCreditOverview,
+  apiLoanRepayments,
+  apiRepayLoan,
+  mapApiLoan,
+  mapApiLoanRepayment,
+  type AppLoan,
+  type AppLoanRepayment,
+} from '../../lib/xtrapayApi';
 import { Icon } from '../Icon';
 import { PinSheetModal } from '../common/PinSheetModal';
 
 type LoansView = 'hub' | 'request' | 'repay';
 
-type ActiveLoan = {
-  id: string;
-  title: string;
-  principal: number;
-  outstanding: number;
-  dueDate: string;
-  tenor: string;
-  status: 'Active' | 'Overdue' | 'Settled';
-};
-
-type RepaymentEntry = {
-  id: string;
-  loanTitle: string;
-  amount: number;
-  date: string;
-  reference: string;
-};
-
 const money = (n: number) =>
   `₦${n.toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
 
-const TENORS = ['14 days', '30 days', '60 days', '90 days'];
+const DEFAULT_TENORS = ['14 days', '30 days', '60 days', '90 days'];
 
 /**
- * Loans centre — overview, request facility, and repay loan.
+ * Loans centre — overview, request facility, repay, active loans + repayment history.
+ * Data from /credit/* (no mock seeds).
  */
 export const LoansScreen: React.FC = () => {
-  const { requestFacility, overdraftLimit, personalBalance, showToast } = useTransactions();
+  const {
+    requestFacility,
+    overdraftLimit,
+    personalBalance,
+    refreshBalances,
+    showToast,
+  } = useTransactions();
   const [view, setView] = useState<LoansView>('hub');
-  const [loans, setLoans] = useState<ActiveLoan[]>([
-    {
-      id: 'ln-1',
-      title: 'Working capital · Sep',
-      principal: 250000,
-      outstanding: 187500,
-      dueDate: '12 Oct 2026',
-      tenor: '30 days',
-      status: 'Active',
-    },
-    {
-      id: 'ln-2',
-      title: 'POS float boost',
-      principal: 100000,
-      outstanding: 42000,
-      dueDate: '28 Sep 2026',
-      tenor: '14 days',
-      status: 'Overdue',
-    },
-  ]);
-  const [repayments, setRepayments] = useState<RepaymentEntry[]>([
-    {
-      id: 'rp-1',
-      loanTitle: 'Working capital · Sep',
-      amount: 62500,
-      date: '05 Sep · 16:10',
-      reference: 'XTR-RP-881201',
-    },
-  ]);
+  const [loading, setLoading] = useState(true);
+  const [loans, setLoans] = useState<AppLoan[]>([]);
+  const [repayments, setRepayments] = useState<AppLoanRepayment[]>([]);
+  const [overviewOutstanding, setOverviewOutstanding] = useState<number | null>(null);
+  const [overdraftUsed, setOverdraftUsed] = useState(0);
+  const [minLoanAmount, setMinLoanAmount] = useState(5000);
+  const [interestFlat, setInterestFlat] = useState(0.025);
+  const [tenors, setTenors] = useState<string[]>(DEFAULT_TENORS);
 
   const [amount, setAmount] = useState('');
   const [tenor, setTenor] = useState('30 days');
@@ -70,26 +49,65 @@ export const LoansScreen: React.FC = () => {
   const [pinMode, setPinMode] = useState<'request' | 'repay'>('request');
   const [repayLoanId, setRepayLoanId] = useState<string | null>(null);
   const [repayAmount, setRepayAmount] = useState('');
+  const [busy, setBusy] = useState(false);
 
   const fieldClass =
     'auth-field w-full h-12 px-4 rounded-2xl text-[var(--text)] text-sm focus:outline-none transition-all placeholder:text-[var(--muted)]';
+
+  const loadCredit = useCallback(async () => {
+    try {
+      const [list, history, overview] = await Promise.all([
+        apiCreditLoans().catch(() => [] as AppLoan[]),
+        apiLoanRepayments().catch(() => [] as AppLoanRepayment[]),
+        apiCreditOverview().catch(() => null),
+      ]);
+      setLoans(list);
+      setRepayments(history);
+      if (overview) {
+        const out = Number(overview.outstandingLoans ?? overview.outstanding_loans);
+        if (!Number.isNaN(out)) setOverviewOutstanding(out);
+        const used = Number(overview.overdraftUsed ?? overview.overdraft_used ?? 0);
+        if (!Number.isNaN(used)) setOverdraftUsed(used);
+        const min = Number(overview.minLoanAmount ?? overview.min_loan_amount);
+        if (!Number.isNaN(min) && min > 0) setMinLoanAmount(min);
+        const rate = Number(overview.interestRateFlat ?? overview.interest_rate_flat);
+        if (!Number.isNaN(rate) && rate > 0) setInterestFlat(rate);
+        if (Array.isArray(overview.tenors) && overview.tenors.length) {
+          setTenors(overview.tenors.map(String));
+          setTenor(prev =>
+            overview.tenors!.map(String).includes(prev) ? prev : String(overview.tenors![0])
+          );
+        }
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadCredit();
+  }, [loadCredit]);
 
   const openLoans = useMemo(
     () => loans.filter(l => l.status !== 'Settled'),
     [loans]
   );
 
-  const totalOutstanding = useMemo(
-    () => openLoans.reduce((s, l) => s + l.outstanding, 0),
-    [openLoans]
-  );
+  const totalOutstanding = useMemo(() => {
+    if (overviewOutstanding != null) return overviewOutstanding;
+    return openLoans.reduce((s, l) => s + l.outstanding, 0);
+  }, [openLoans, overviewOutstanding]);
 
   const selectedRepayLoan = openLoans.find(l => l.id === repayLoanId) ?? openLoans[0] ?? null;
 
   const submitRequest = () => {
     const n = Number(amount.replace(/,/g, ''));
-    if (!n || n < 5000) {
-      showToast('Invalid amount', 'Minimum loan request is ₦5,000.', 'warning');
+    if (!n || n < minLoanAmount) {
+      showToast(
+        'Invalid amount',
+        `Minimum loan request is ${money(minLoanAmount)}.`,
+        'warning'
+      );
       return;
     }
     setPinMode('request');
@@ -100,7 +118,7 @@ export const LoansScreen: React.FC = () => {
     const id = loanId ?? openLoans[0]?.id ?? null;
     setRepayLoanId(id);
     const loan = loans.find(l => l.id === id);
-    setRepayAmount(loan ? String(loan.outstanding) : '');
+    setRepayAmount(loan ? String(Math.round(loan.outstanding)) : '');
     setView('repay');
   };
 
@@ -128,78 +146,79 @@ export const LoansScreen: React.FC = () => {
   };
 
   const onPinSuccess = async (pin: string) => {
-    setPinOpen(false);
     if (pinMode === 'request') {
       const n = Number(amount.replace(/,/g, ''));
-      const ok = await requestFacility({ kind: 'loan', amount: n, tenor, pin });
-      if (!ok) return;
-      setLoans(prev => [
-        {
-          id: `ln-${Date.now()}`,
-          title: `Quick loan · ${tenor}`,
-          principal: n,
-          outstanding: Math.round(n * 1.025),
-          dueDate: tenor.includes('14')
-            ? '27 Sep 2026'
-            : tenor.includes('60')
-              ? '12 Nov 2026'
-              : tenor.includes('90')
-                ? '12 Dec 2026'
-                : '13 Oct 2026',
-          tenor,
-          status: 'Active',
-        },
-        ...prev,
-      ]);
-      setAmount('');
-      setView('hub');
+      setBusy(true);
+      try {
+        const ok = await requestFacility({ kind: 'loan', amount: n, tenor, pin });
+        if (!ok) return;
+        setAmount('');
+        setView('hub');
+        setLoading(true);
+        await loadCredit();
+        void refreshBalances();
+      } finally {
+        setBusy(false);
+        setPinOpen(false);
+      }
       return;
     }
 
     if (pinMode === 'repay' && repayLoanId) {
-      const loan = loans.find(l => l.id === repayLoanId);
-      if (!loan) return;
       const pay = Number(repayAmount.replace(/,/g, '')) || 0;
-      const applied = Math.min(pay, loan.outstanding, personalBalance);
-      if (applied <= 0) {
-        showToast('Insufficient balance', 'Fund your wallet to repay.', 'warning');
-        return;
+      setBusy(true);
+      try {
+        const res = await apiRepayLoan(repayLoanId, { amount: pay, pin });
+        if (res.loan) {
+          const mapped = mapApiLoan(res.loan);
+          setLoans(prev => {
+            const exists = prev.some(l => l.id === mapped.id);
+            return exists
+              ? prev.map(l => (l.id === mapped.id ? mapped : l))
+              : [mapped, ...prev];
+          });
+        }
+        if (res.repayment) {
+          setRepayments(prev => [mapApiLoanRepayment(res.repayment!), ...prev]);
+        }
+        void refreshBalances();
+        await loadCredit();
+        const left =
+          res.outstanding ??
+          res.loan?.outstanding ??
+          Math.max(0, (selectedRepayLoan?.outstanding ?? 0) - pay);
+        showToast(
+          Number(left) <= 0 ? 'Loan settled' : 'Repayment successful',
+          Number(left) <= 0
+            ? `${selectedRepayLoan?.title ?? 'Loan'} is fully repaid.`
+            : `${money(pay)} applied · ${money(Number(left))} left.`,
+          'success'
+        );
+        setRepayAmount('');
+        setView('hub');
+        setPinOpen(false);
+      } catch (err) {
+        showToast(
+          'Repayment failed',
+          err instanceof ApiError ? err.message : 'Could not repay this loan.',
+          'warning'
+        );
+      } finally {
+        setBusy(false);
       }
-      const next = Math.max(0, loan.outstanding - applied);
-      setLoans(prev =>
-        prev.map(l =>
-          l.id === repayLoanId
-            ? {
-                ...l,
-                outstanding: next,
-                status: next === 0 ? 'Settled' : l.status === 'Overdue' && next > 0 ? 'Active' : l.status,
-              }
-            : l
-        )
-      );
-      setRepayments(prev => [
-        {
-          id: `rp-${Date.now()}`,
-          loanTitle: loan.title,
-          amount: applied,
-          date: 'Just now',
-          reference: `XTR-RP-${Math.floor(100000 + Math.random() * 900000)}`,
-        },
-        ...prev,
-      ]);
-      showToast(
-        next === 0 ? 'Loan settled' : 'Repayment successful',
-        next === 0
-          ? `${loan.title} is fully repaid.`
-          : `${money(applied)} applied · ${money(next)} left on ${loan.title}.`,
-        'success'
-      );
-      setRepayAmount('');
-      setView('hub');
     }
   };
 
+  if (loading && view === 'hub') {
+    return (
+      <main className="flex-1 min-w-0 px-5 pt-4 pb-32" id="loans-screen">
+        <p className="text-[13px] text-[var(--muted)] text-center py-16">Loading credit…</p>
+      </main>
+    );
+  }
+
   if (view === 'request') {
+    const ratePct = (interestFlat <= 1 ? interestFlat * 100 : interestFlat).toFixed(1);
     return (
       <main className="flex-1 min-w-0 px-5 pt-4 pb-32 space-y-4" id="loans-request-screen">
         <header className="hub-action-shell !rounded-[28px] px-4 py-3.5 flex items-center justify-between gap-3">
@@ -225,10 +244,10 @@ export const LoansScreen: React.FC = () => {
             inputMode="numeric"
             value={amount}
             onChange={e => setAmount(e.target.value.replace(/[^\d]/g, ''))}
-            placeholder="Amount (min ₦5,000)"
+            placeholder={`Amount (min ${money(minLoanAmount)})`}
           />
           <div className="hub-action-shell !rounded-[28px] p-1.5 grid grid-cols-2 gap-1">
-            {TENORS.map(t => (
+            {tenors.map(t => (
               <button
                 key={t}
                 type="button"
@@ -242,8 +261,9 @@ export const LoansScreen: React.FC = () => {
             ))}
           </div>
           <p className="text-[11px] text-[var(--muted)] leading-snug px-0.5">
-            Indicative interest 2.5% flat. Disbursed to your personal wallet after PIN confirm.
-            Overdraft line available: {money(overdraftLimit)}.
+            Indicative interest {ratePct}% flat. Disbursed to your personal wallet after PIN confirm.
+            Overdraft line available: {money(overdraftLimit)}
+            {overdraftUsed > 0 ? ` · used ${money(overdraftUsed)}` : ''}.
           </p>
           <button type="button" onClick={submitRequest} className="glass-cta w-full !rounded-2xl">
             Continue to PIN
@@ -252,10 +272,10 @@ export const LoansScreen: React.FC = () => {
 
         <PinSheetModal
           isOpen={pinOpen}
-          onClose={() => setPinOpen(false)}
+          onClose={() => !busy && setPinOpen(false)}
           title="Confirm loan request"
           subtitle={`Borrow ${amount ? money(Number(amount.replace(/,/g, ''))) : '—'} · ${tenor}`}
-          onSuccess={onPinSuccess}
+          onSuccess={pin => void onPinSuccess(pin)}
         />
       </main>
     );
@@ -307,7 +327,7 @@ export const LoansScreen: React.FC = () => {
                     type="button"
                     onClick={() => {
                       setRepayLoanId(loan.id);
-                      setRepayAmount(String(loan.outstanding));
+                      setRepayAmount(String(Math.round(loan.outstanding)));
                     }}
                     className={`settings-row w-full hub-action-shell !rounded-[28px] px-4 py-3.5 text-left appearance-none border-0 cursor-pointer ${
                       active ? 'ring-2 ring-[var(--accent)]/40' : ''
@@ -342,7 +362,8 @@ export const LoansScreen: React.FC = () => {
               <button
                 type="button"
                 onClick={() =>
-                  selectedRepayLoan && setRepayAmount(String(selectedRepayLoan.outstanding))
+                  selectedRepayLoan &&
+                  setRepayAmount(String(Math.round(selectedRepayLoan.outstanding)))
                 }
                 className="settings-row flex-1 h-10 rounded-2xl text-[12px] font-semibold bg-[var(--accent)]/12 text-[var(--accent)] appearance-none border-0 cursor-pointer"
               >
@@ -352,7 +373,9 @@ export const LoansScreen: React.FC = () => {
                 type="button"
                 onClick={() =>
                   selectedRepayLoan &&
-                  setRepayAmount(String(Math.min(50000, selectedRepayLoan.outstanding)))
+                  setRepayAmount(
+                    String(Math.min(50000, Math.round(selectedRepayLoan.outstanding)))
+                  )
                 }
                 className="settings-row flex-1 h-10 rounded-2xl text-[12px] font-semibold bg-black/5 dark:bg-white/10 text-[var(--muted)] appearance-none border-0 cursor-pointer"
               >
@@ -395,7 +418,7 @@ export const LoansScreen: React.FC = () => {
 
         <PinSheetModal
           isOpen={pinOpen}
-          onClose={() => setPinOpen(false)}
+          onClose={() => !busy && setPinOpen(false)}
           title="Confirm repayment"
           subtitle={
             selectedRepayLoan
@@ -403,7 +426,7 @@ export const LoansScreen: React.FC = () => {
               : 'Enter your transaction PIN'
           }
           amount={Number(repayAmount.replace(/,/g, '')) || undefined}
-          onSuccess={onPinSuccess}
+          onSuccess={pin => void onPinSuccess(pin)}
         />
       </main>
     );
@@ -417,7 +440,9 @@ export const LoansScreen: React.FC = () => {
           Outstanding · {money(totalOutstanding)}
         </h1>
         <p className="mt-2 text-[11px] text-[var(--muted)]">
-          Overdraft available {money(overdraftLimit)} · Request or repay from your wallet
+          Overdraft available {money(overdraftLimit)}
+          {overdraftUsed > 0 ? ` · used ${money(overdraftUsed)}` : ''} · Request or repay from your
+          wallet
         </p>
       </header>
 
@@ -451,59 +476,62 @@ export const LoansScreen: React.FC = () => {
           Active loans
         </p>
         <div className="space-y-2.5">
-          {loans.map(loan => (
-            <article
-              key={loan.id}
-              className="hub-action-shell !rounded-[28px] px-4 py-3.5 space-y-3"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="text-[13px] font-semibold text-[var(--text)] truncate">{loan.title}</p>
-                  <p className="mt-1 text-[11px] text-[var(--muted)]">
-                    Due {loan.dueDate} · {loan.tenor}
-                  </p>
-                </div>
-                <span
-                  className={`shrink-0 text-[10px] font-semibold px-2 py-1 rounded-full ${
-                    loan.status === 'Overdue'
-                      ? 'bg-rose-500/15 text-rose-500'
-                      : loan.status === 'Settled'
-                        ? 'bg-emerald-500/15 text-emerald-600'
-                        : 'bg-[var(--accent)]/12 text-[var(--accent)]'
-                  }`}
-                >
-                  {loan.status}
-                </span>
-              </div>
-              <div className="flex items-end justify-between gap-3">
-                <div>
-                  <p className="text-[10px] text-[var(--muted)]">Outstanding</p>
-                  <p className="text-[16px] font-semibold text-[var(--text)] tracking-tight">
-                    {money(loan.outstanding)}
-                  </p>
-                </div>
-                {loan.status !== 'Settled' && (
-                  <button
-                    type="button"
-                    onClick={() => openRepayView(loan.id)}
-                    className="settings-row h-9 px-3 rounded-xl bg-[var(--accent)] text-white text-[12px] font-semibold appearance-none border-0 cursor-pointer"
+          {loans.length === 0 ? (
+            <div className="hub-action-shell !rounded-[28px] px-4 py-8 text-center">
+              <p className="text-[13px] font-semibold text-[var(--text)]">No loans yet</p>
+              <p className="mt-1 text-[11px] text-[var(--muted)]">
+                Request a loan to borrow into your wallet.
+              </p>
+            </div>
+          ) : (
+            loans.map(loan => (
+              <article
+                key={loan.id}
+                className="hub-action-shell !rounded-[28px] px-4 py-3.5 space-y-3"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-[13px] font-semibold text-[var(--text)] truncate">{loan.title}</p>
+                    <p className="mt-1 text-[11px] text-[var(--muted)]">
+                      Due {loan.dueDate} · {loan.tenor}
+                    </p>
+                  </div>
+                  <span
+                    className={`shrink-0 text-[10px] font-semibold px-2 py-1 rounded-full ${
+                      loan.status === 'Overdue'
+                        ? 'bg-rose-500/15 text-rose-500'
+                        : loan.status === 'Settled'
+                          ? 'bg-emerald-500/15 text-emerald-600'
+                          : loan.status === 'Pending'
+                            ? 'bg-amber-500/15 text-amber-600'
+                            : 'bg-[var(--accent)]/12 text-[var(--accent)]'
+                    }`}
                   >
-                    Repay
-                  </button>
-                )}
-              </div>
-            </article>
-          ))}
+                    {loan.status}
+                  </span>
+                </div>
+                <div className="flex items-end justify-between gap-3">
+                  <div>
+                    <p className="text-[10px] text-[var(--muted)]">Outstanding</p>
+                    <p className="text-[16px] font-semibold text-[var(--text)] tracking-tight">
+                      {money(loan.outstanding)}
+                    </p>
+                  </div>
+                  {loan.status !== 'Settled' && loan.status !== 'Pending' && (
+                    <button
+                      type="button"
+                      onClick={() => openRepayView(loan.id)}
+                      className="settings-row h-9 px-3 rounded-xl bg-[var(--accent)] text-white text-[12px] font-semibold appearance-none border-0 cursor-pointer"
+                    >
+                      Repay
+                    </button>
+                  )}
+                </div>
+              </article>
+            ))
+          )}
         </div>
       </section>
-
-      <PinSheetModal
-        isOpen={pinOpen}
-        onClose={() => setPinOpen(false)}
-        title="Confirm"
-        subtitle="Enter your transaction PIN"
-        onSuccess={onPinSuccess}
-      />
     </main>
   );
 };

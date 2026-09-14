@@ -12,6 +12,7 @@ import { HistoryScreen } from './components/screens/HistoryScreen';
 import { TransferScreen } from './components/screens/TransferScreen';
 import { ReceiveScreen } from './components/screens/ReceiveScreen';
 import { PayBillsScreen } from './components/screens/PayBillsScreen';
+import { AirtimeScreen, DataScreen } from './components/screens/AirtimeScreen';
 import { AskMoneyScreen } from './components/screens/AskMoneyScreen';
 import { SaveTogetherScreen } from './components/screens/SaveTogetherScreen';
 import { TerminalScreen } from './components/screens/TerminalScreen';
@@ -20,8 +21,10 @@ import { ProfileScreen } from './components/screens/ProfileScreen';
 import { PayScreen } from './components/screens/PayScreen';
 import { ServicesScreen } from './components/screens/ServicesScreen';
 import { StatementScreen } from './components/screens/StatementScreen';
+import { SettlementScreen } from './components/screens/SettlementScreen';
 import { RecurringPaymentsScreen } from './components/screens/RecurringPaymentsScreen';
 import { SubAccountsScreen } from './components/screens/SubAccountsScreen';
+import { BusinessAccountsScreen } from './components/screens/BusinessAccountsScreen';
 import { TermsScreen, PrivacyScreen } from './components/screens/LegalScreen';
 import { CheckoutNowScreen } from './components/screens/CheckoutNowScreen';
 import { LoansScreen } from './components/screens/LoansScreen';
@@ -69,10 +72,14 @@ const AppContent: React.FC = () => {
         return <ServicesScreen />;
       case 'statement':
         return <StatementScreen />;
+      case 'settlement':
+        return <SettlementScreen />;
       case 'recurring':
         return <RecurringPaymentsScreen />;
       case 'sub_accounts':
         return <SubAccountsScreen />;
+      case 'business_accounts':
+        return <BusinessAccountsScreen />;
       case 'saving':
         return <SavingScreen />;
       case 'save_together':
@@ -91,6 +98,10 @@ const AppContent: React.FC = () => {
         return <ReceiveScreen />;
       case 'paybills':
         return <PayBillsScreen />;
+      case 'airtime':
+        return <AirtimeScreen />;
+      case 'data':
+        return <DataScreen />;
       case 'terminals':
         return <TerminalScreen />;
       case 'xpoints':

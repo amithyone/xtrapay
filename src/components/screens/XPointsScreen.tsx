@@ -1,14 +1,12 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTransactions } from '../../context/TransactionContext';
+import { ApiError } from '../../lib/api';
+import { apiRedeemXPoints, apiXPoints, type AppXPointsSummary } from '../../lib/xtrapayApi';
 import { Icon } from '../Icon';
 import { PinSheetModal } from '../common/PinSheetModal';
-import { INITIAL_TERMINAL_TXS } from '../../data/terminals';
 
 const money = (n: number) =>
   `₦${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-
-/** 1 XP = ₦5 wallet credit (demo rate) */
-const XP_TO_NAIRA = 5;
 
 type RedeemOption = 'wallet' | 'airtime' | 'data' | 'commission';
 
@@ -44,62 +42,45 @@ const REDEEM_OPTIONS: {
   },
 ];
 
-/** Wallet-level X-Points & commission (Agent view from Hub). */
+/** Wallet-level X-Points & commission — live `/xpoints`. */
 export const XPointsScreen: React.FC = () => {
-  const { theme, showToast } = useTransactions();
+  const { theme, showToast, refreshBalances } = useTransactions();
   const isLight = theme === 'light';
 
-  const [available, setAvailable] = useState(920);
-  const [redeemed, setRedeemed] = useState(142);
-  const [pending] = useState(186);
-  const total = available + pending + redeemed;
-
+  const [summary, setSummary] = useState<AppXPointsSummary | null>(null);
+  const [loading, setLoading] = useState(true);
   const [redeemOpen, setRedeemOpen] = useState(false);
   const [redeemOption, setRedeemOption] = useState<RedeemOption>('wallet');
   const [xpAmount, setXpAmount] = useState('200');
   const [pinOpen, setPinOpen] = useState(false);
-  const [redeemLedger, setRedeemLedger] = useState<
-    {
-      id: string;
-      title: string;
-      meta: string;
-      amount: number;
-      xPoints: number;
-      commission: number;
-      when: string;
-      status: 'Successful';
-    }[]
-  >([]);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const data = await apiXPoints();
+      setSummary(data);
+    } catch {
+      setSummary(null);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const available = summary?.available ?? 0;
+  const pending = summary?.pending ?? 0;
+  const redeemed = summary?.redeemed ?? 0;
+  const total = summary?.total ?? available + pending + redeemed;
+  const xpToNaira = summary?.xpToNaira || 5;
+  const ledger = summary?.ledger ?? [];
 
   const nairaValue = useMemo(() => {
     const xp = parseInt(xpAmount.replace(/\D/g, ''), 10) || 0;
-    return xp * XP_TO_NAIRA;
-  }, [xpAmount]);
-
-  const baseLedger = [
-    ...INITIAL_TERMINAL_TXS.map(tx => ({
-      id: tx.id,
-      title: tx.type,
-      meta: `${tx.terminalId} · ${tx.reference}`,
-      amount: tx.amount,
-      xPoints: tx.xPoints || 0,
-      commission: tx.commission || 0,
-      when: `${tx.date} · ${tx.time}`,
-      status: tx.status,
-    })),
-    {
-      id: 'xp-bonus',
-      title: 'Loyalty bonus',
-      meta: 'WALLET · XP-20260901-BONUS',
-      amount: 0,
-      xPoints: 50,
-      commission: 0,
-      when: '01 Sep 2026 · 09:00',
-      status: 'Successful' as const,
-    },
-  ];
-
-  const ledger = [...redeemLedger, ...baseLedger];
+    return xp * xpToNaira;
+  }, [xpAmount, xpToNaira]);
 
   const openRedeem = () => {
     if (available <= 0) {
@@ -125,38 +106,49 @@ export const XPointsScreen: React.FC = () => {
     setPinOpen(true);
   };
 
-  const handleRedeemSuccess = () => {
+  const handleRedeemSuccess = async (pin: string) => {
     const xp = parseInt(xpAmount.replace(/\D/g, ''), 10) || 0;
     const option = REDEEM_OPTIONS.find(o => o.id === redeemOption);
-    const cash = xp * XP_TO_NAIRA;
-    setAvailable(prev => prev - xp);
-    setRedeemed(prev => prev + xp);
-    setRedeemLedger(prev => [
-      {
-        id: `xpr-${Date.now()}`,
-        title: `Redeemed · ${option?.label ?? 'Wallet'}`,
-        meta: `WALLET · XPR-${Date.now().toString().slice(-8)}`,
-        amount: redeemOption === 'wallet' || redeemOption === 'commission' ? cash : 0,
-        xPoints: -xp,
-        commission: 0,
-        when: 'Just now',
-        status: 'Successful',
-      },
-      ...prev,
-    ]);
-    setPinOpen(false);
-    showToast(
-      'X-Points Redeemed',
-      redeemOption === 'wallet'
-        ? `${xp.toLocaleString()} XP → ${money(cash)} credited to your wallet.`
-        : `${xp.toLocaleString()} XP redeemed as ${option?.label}.`,
-      'success'
-    );
+    setBusy(true);
+    try {
+      const res = await apiRedeemXPoints({
+        channel: redeemOption,
+        amount: xp,
+        pin,
+      });
+      setPinOpen(false);
+      void refreshBalances();
+      await load();
+      const cash = res.cashValue ?? xp * xpToNaira;
+      showToast(
+        'X-Points Redeemed',
+        redeemOption === 'wallet'
+          ? `${xp.toLocaleString()} XP → ${money(cash)} credited to your wallet.`
+          : `${xp.toLocaleString()} XP redeemed as ${option?.label}.`,
+        'success'
+      );
+    } catch (err) {
+      showToast(
+        'Redeem failed',
+        err instanceof ApiError ? err.message : 'Could not redeem X-Points.',
+        'warning'
+      );
+    } finally {
+      setBusy(false);
+    }
   };
 
   const quickXp = [50, 100, 200, available].filter(
     (v, i, arr) => v > 0 && v <= available && arr.indexOf(v) === i
   );
+
+  if (loading && !summary) {
+    return (
+      <main className="flex-1 min-w-0 px-5 pt-5 pb-32" id="xpoints-screen">
+        <p className="text-[13px] text-[var(--muted)] text-center py-16">Loading X-Points…</p>
+      </main>
+    );
+  }
 
   return (
     <main className="flex-1 min-w-0 px-5 pt-5 pb-32 space-y-4" id="xpoints-screen">
@@ -195,7 +187,8 @@ export const XPointsScreen: React.FC = () => {
           </span>
         </div>
         <p className={`mt-2 text-[12px] ${isLight ? 'text-zinc-500' : 'text-white/65'}`}>
-          Worth about {money(available * XP_TO_NAIRA)} · 1 XP = ₦{XP_TO_NAIRA}
+          Worth about {money(available * xpToNaira)} · 1 XP = ₦{xpToNaira}
+          {summary?.rateLabel ? ` · ${summary.rateLabel}` : ''}
         </p>
         <button
           type="button"
@@ -240,7 +233,7 @@ export const XPointsScreen: React.FC = () => {
           <Icon name="toll" size={16} className="text-[var(--accent)]" />
         </div>
         <p className="mt-2 text-[1.5rem] font-semibold font-mono text-[var(--text)] leading-none">
-          {money(18_450.75)}
+          {money(summary?.commissionEarned ?? 0)}
         </p>
         <p className="mt-1.5 text-[11px] text-[var(--muted)]">
           Backend-controlled rates · settlement pending included above
@@ -251,34 +244,40 @@ export const XPointsScreen: React.FC = () => {
         <p className="px-1 text-[10px] font-medium uppercase tracking-[0.28em] text-[var(--muted)]">
           Activity ledger
         </p>
-        {ledger.map(row => (
-          <div
-            key={row.id}
-            className="glass-card !rounded-[20px] px-3.5 py-3.5 flex items-start justify-between gap-3"
-          >
-            <div className="min-w-0">
-              <p className="text-[13px] font-semibold text-[var(--text)] truncate">{row.title}</p>
-              <p className="mt-0.5 text-[10px] font-mono text-[var(--muted)] truncate">{row.meta}</p>
-              <p className="mt-1 text-[10px] text-[var(--muted)]">{row.when}</p>
-            </div>
-            <div className="text-right shrink-0">
-              {row.amount > 0 && (
-                <p className="text-[12px] font-mono text-[var(--text)]">{money(row.amount)}</p>
-              )}
-              <p
-                className={`text-[12px] font-semibold ${
-                  row.xPoints < 0 ? 'text-rose-500' : 'text-emerald-500'
-                }`}
-              >
-                {row.xPoints > 0 ? '+' : ''}
-                {row.xPoints} XP
-              </p>
-              {row.commission > 0 && (
-                <p className="text-[10px] text-[var(--muted)]">Comm {money(row.commission)}</p>
-              )}
-            </div>
+        {ledger.length === 0 ? (
+          <div className="glass-card !rounded-[20px] px-4 py-8 text-center text-[12px] text-[var(--muted)]">
+            No X-Points activity yet.
           </div>
-        ))}
+        ) : (
+          ledger.map(row => (
+            <div
+              key={row.id}
+              className="glass-card !rounded-[20px] px-3.5 py-3.5 flex items-start justify-between gap-3"
+            >
+              <div className="min-w-0">
+                <p className="text-[13px] font-semibold text-[var(--text)] truncate">{row.title}</p>
+                <p className="mt-0.5 text-[10px] font-mono text-[var(--muted)] truncate">{row.meta}</p>
+                <p className="mt-1 text-[10px] text-[var(--muted)]">{row.when}</p>
+              </div>
+              <div className="text-right shrink-0">
+                {row.amount > 0 && (
+                  <p className="text-[12px] font-mono text-[var(--text)]">{money(row.amount)}</p>
+                )}
+                <p
+                  className={`text-[12px] font-semibold ${
+                    row.xPoints < 0 ? 'text-rose-500' : 'text-emerald-500'
+                  }`}
+                >
+                  {row.xPoints > 0 ? '+' : ''}
+                  {row.xPoints} XP
+                </p>
+                {row.commission > 0 && (
+                  <p className="text-[10px] text-[var(--muted)]">Comm {money(row.commission)}</p>
+                )}
+              </div>
+            </div>
+          ))
+        )}
       </section>
 
       {redeemOpen && (
@@ -363,11 +362,11 @@ export const XPointsScreen: React.FC = () => {
 
       <PinSheetModal
         isOpen={pinOpen}
-        onClose={() => setPinOpen(false)}
+        onClose={() => !busy && setPinOpen(false)}
         title="Authorize Redemption"
         subtitle={`Redeem ${xpAmount || '0'} XP as ${REDEEM_OPTIONS.find(o => o.id === redeemOption)?.label}`}
         amount={nairaValue}
-        onSuccess={handleRedeemSuccess}
+        onSuccess={pin => void handleRedeemSuccess(pin)}
       />
     </main>
   );

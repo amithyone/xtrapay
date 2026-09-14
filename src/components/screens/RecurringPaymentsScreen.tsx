@@ -1,8 +1,17 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTransactions } from '../../context/TransactionContext';
 import { INITIAL_BENEFICIARIES } from '../../data/initialData';
 import { ApiError } from '../../lib/api';
-import { apiNameEnquiry } from '../../lib/xtrapayApi';
+import {
+  apiCreateRecurring,
+  apiDeleteRecurring,
+  apiNameEnquiry,
+  apiPatchRecurring,
+  apiRecurringPlans,
+  apiRecurringRuns,
+  type AppRecurringPlan,
+  type AppRecurringRun,
+} from '../../lib/xtrapayApi';
 import { Icon } from '../Icon';
 import { PinSheetModal } from '../common/PinSheetModal';
 
@@ -10,34 +19,12 @@ type ScheduleMode = 'end_of_month' | 'custom';
 type CustomCadence = 'daily' | 'weekly' | 'monthly' | 'every_n_days';
 type ViewMode = 'list' | 'create';
 
-interface RecurringPlan {
-  id: string;
-  recipientName: string;
-  bankName: string;
-  accountNumber: string;
-  amount: number;
-  narration: string;
-  scheduleLabel: string;
-  nextRun: string;
-  active: boolean;
-}
-
-interface RecurringRun {
-  id: string;
-  planId: string;
-  recipientName: string;
-  amount: number;
-  status: 'Successful' | 'Failed' | 'Pending';
-  date: string;
-  time: string;
-  reference: string;
-}
 
 const money = (n: number) =>
   `₦${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 function lastDayOfThisOrNextMonthLabel(): string {
-  const now = new Date(2026, 8, 13);
+  const now = new Date();
   const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
   if (now.getDate() >= end.getDate()) {
     const nextEnd = new Date(now.getFullYear(), now.getMonth() + 2, 0);
@@ -63,7 +50,14 @@ function nextCustomRunLabel(
   if (cadence === 'weekly') return 'Next Monday';
   if (cadence === 'every_n_days') return `In ${Math.max(1, everyNDays)} day(s)`;
   const d = Math.min(28, Math.max(1, dayOfMonth));
-  return `${String(d).padStart(2, '0')} Oct 2026`;
+  const label = new Date();
+  label.setDate(d);
+  if (label <= new Date()) label.setMonth(label.getMonth() + 1);
+  return label.toLocaleDateString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  });
 }
 
 /**
@@ -75,85 +69,11 @@ export const RecurringPaymentsScreen: React.FC = () => {
   const nameEnquirySeq = useRef(0);
   const [nameLoading, setNameLoading] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
 
-  const [plans, setPlans] = useState<RecurringPlan[]>([
-    {
-      id: 'rcp-1',
-      recipientName: 'LANDLORD LEKKI',
-      bankName: 'Zenith Bank',
-      accountNumber: '0124892019',
-      amount: 850_000,
-      narration: 'Rent · Lekki',
-      scheduleLabel: 'Every end of month',
-      nextRun: '30 Sep 2026',
-      active: true,
-    },
-    {
-      id: 'rcp-2',
-      recipientName: 'MULTICHOICE NG',
-      bankName: 'GTBank',
-      accountNumber: '0044211988',
-      amount: 24_500,
-      narration: 'DSTV Compact',
-      scheduleLabel: 'Custom · Day 15 monthly',
-      nextRun: '15 Sep 2026',
-      active: true,
-    },
-    {
-      id: 'rcp-3',
-      recipientName: 'MTN NIGERIA',
-      bankName: 'Xtrapay Wallet',
-      accountNumber: '08034129981',
-      amount: 2_000,
-      narration: 'Airtime · Self',
-      scheduleLabel: 'Custom · Weekly',
-      nextRun: 'Fri · 18 Sep',
-      active: false,
-    },
-  ]);
-
-  const [runs] = useState<RecurringRun[]>([
-    {
-      id: 'rr-1',
-      planId: 'rcp-1',
-      recipientName: 'LANDLORD LEKKI',
-      amount: 850_000,
-      status: 'Successful',
-      date: '31 Aug 2026',
-      time: '23:58',
-      reference: 'RCP-20260831-88421',
-    },
-    {
-      id: 'rr-2',
-      planId: 'rcp-2',
-      recipientName: 'MULTICHOICE NG',
-      amount: 24_500,
-      status: 'Successful',
-      date: '15 Aug 2026',
-      time: '06:02',
-      reference: 'RCP-20260815-44102',
-    },
-    {
-      id: 'rr-3',
-      planId: 'rcp-1',
-      recipientName: 'LANDLORD LEKKI',
-      amount: 850_000,
-      status: 'Failed',
-      date: '31 Jul 2026',
-      time: '23:59',
-      reference: 'RCP-20260731-22918',
-    },
-    {
-      id: 'rr-4',
-      planId: 'rcp-2',
-      recipientName: 'MULTICHOICE NG',
-      amount: 24_500,
-      status: 'Successful',
-      date: '15 Jul 2026',
-      time: '06:01',
-      reference: 'RCP-20260715-11028',
-    },
-  ]);
+  const [plans, setPlans] = useState<AppRecurringPlan[]>([]);
+  const [runs, setRuns] = useState<AppRecurringRun[]>([]);
 
   // Create form state
   const [channel, setChannel] = useState<'bank' | 'wallet'>('bank');
@@ -168,6 +88,33 @@ export const RecurringPaymentsScreen: React.FC = () => {
   const [everyNDays, setEveryNDays] = useState(14);
   const [pinOpen, setPinOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+
+  const loadPlans = useCallback(async () => {
+    try {
+      const list = await apiRecurringPlans();
+      setPlans(list);
+    } catch {
+      setPlans([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const loadRuns = useCallback(async (planId?: string) => {
+    try {
+      setRuns(await apiRecurringRuns(planId));
+    } catch {
+      setRuns([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadPlans();
+  }, [loadPlans]);
+
+  useEffect(() => {
+    if (historyOpen) void loadRuns();
+  }, [historyOpen, loadRuns]);
 
   useEffect(() => {
     if (!banks.length) return;
@@ -294,60 +241,96 @@ export const RecurringPaymentsScreen: React.FC = () => {
     setPinOpen(true);
   };
 
-  const handlePinSuccess = () => {
+  const handlePinSuccess = async (pin: string) => {
     const numericAmount = parseFloat(amountStr.replace(/,/g, '')) || 0;
-    const next: RecurringPlan = {
-      id: `rcp-${Date.now()}`,
-      recipientName: recipientName || 'BENEFICIARY RECIPIENT',
-      bankName: channel === 'wallet' ? 'Xtrapay Wallet' : selectedBank,
-      accountNumber,
-      amount: numericAmount,
-      narration: narration.trim() || 'Recurring transfer',
-      scheduleLabel: schedulePreview.label,
-      nextRun: schedulePreview.nextRun,
-      active: true,
-    };
-    setPlans(prev => [next, ...prev]);
-    setPinOpen(false);
-    setView('list');
-    showToast(
-      'Recurring Transfer Set',
-      `${money(numericAmount)} to ${next.recipientName} · ${next.scheduleLabel}`,
-      'success'
-    );
+    setBusy(true);
+    try {
+      const plan = await apiCreateRecurring({
+        channel,
+        recipientName: recipientName || 'BENEFICIARY RECIPIENT',
+        bankName: channel === 'wallet' ? 'Xtrapay Wallet' : selectedBank,
+        bankCode: channel === 'bank' ? selectedBankMeta?.code : undefined,
+        accountNumber,
+        amount: numericAmount,
+        narration: narration.trim() || 'Recurring transfer',
+        scheduleMode,
+        customCadence: scheduleMode === 'custom' ? customCadence : undefined,
+        dayOfMonth: scheduleMode === 'custom' && customCadence === 'monthly' ? dayOfMonth : undefined,
+        everyNDays:
+          scheduleMode === 'custom' && customCadence === 'every_n_days' ? everyNDays : undefined,
+        pin,
+      });
+      setPlans(prev => [plan, ...prev.filter(p => p.id !== plan.id)]);
+      setPinOpen(false);
+      setView('list');
+      showToast(
+        'Recurring Transfer Set',
+        `${money(numericAmount)} to ${plan.recipientName} · ${plan.scheduleLabel}`,
+        'success'
+      );
+    } catch (err) {
+      showToast(
+        'Could not create',
+        err instanceof ApiError ? err.message : 'Recurring API unavailable.',
+        'warning'
+      );
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const togglePlan = (id: string) => {
-    setPlans(prev => {
-      const next = prev.map(p => (p.id === id ? { ...p, active: !p.active } : p));
-      const plan = next.find(p => p.id === id);
-      if (plan) {
-        showToast(
-          plan.active ? 'Resumed' : 'Paused',
-          `${plan.recipientName} is now ${plan.active ? 'active' : 'paused'}.`,
-          'info'
-        );
-      }
-      return next;
-    });
+  const togglePlan = async (id: string) => {
+    const plan = plans.find(p => p.id === id);
+    if (!plan) return;
+    try {
+      const updated = await apiPatchRecurring(id, { active: !plan.active });
+      setPlans(prev => prev.map(p => (p.id === id ? updated : p)));
+      showToast(
+        updated.active ? 'Resumed' : 'Paused',
+        `${updated.recipientName} is now ${updated.active ? 'active' : 'paused'}.`,
+        'info'
+      );
+    } catch (err) {
+      showToast(
+        'Update failed',
+        err instanceof ApiError ? err.message : 'Could not update schedule.',
+        'warning'
+      );
+    }
   };
 
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
     if (!deleteId) return;
     const plan = plans.find(p => p.id === deleteId);
-    setPlans(prev => prev.filter(p => p.id !== deleteId));
-    setDeleteId(null);
-    showToast(
-      'Schedule Deleted',
-      plan
-        ? `${plan.recipientName} recurring transfer was removed.`
-        : 'Recurring schedule removed.',
-      'info'
-    );
+    try {
+      await apiDeleteRecurring(deleteId);
+      setPlans(prev => prev.filter(p => p.id !== deleteId));
+      setDeleteId(null);
+      showToast(
+        'Schedule Deleted',
+        plan
+          ? `${plan.recipientName} recurring transfer was removed.`
+          : 'Recurring schedule removed.',
+        'info'
+      );
+    } catch (err) {
+      showToast(
+        'Delete failed',
+        err instanceof ApiError ? err.message : 'Could not delete schedule.',
+        'warning'
+      );
+    }
   };
 
   /* ───────── LIST VIEW ───────── */
   if (view === 'list') {
+    if (loading) {
+      return (
+        <main className="flex-1 min-w-0 px-5 pt-5 pb-32" id="recurring-screen">
+          <p className="text-[13px] text-[var(--muted)] text-center py-16">Loading schedules…</p>
+        </main>
+      );
+    }
     return (
       <main className="flex-1 min-w-0 px-5 pt-5 pb-32 space-y-4" id="recurring-screen">
         <button
@@ -426,7 +409,7 @@ export const RecurringPaymentsScreen: React.FC = () => {
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
-                      onClick={() => togglePlan(plan.id)}
+                      onClick={() => void togglePlan(plan.id)}
                       className="settings-row flex-1 h-9 rounded-xl border border-[var(--glass-border)] text-[11px] font-semibold text-[var(--text)] appearance-none cursor-pointer bg-black/[0.03] dark:bg-white/[0.05]"
                     >
                       {plan.active ? 'Pause' : 'Resume'}
@@ -542,7 +525,7 @@ export const RecurringPaymentsScreen: React.FC = () => {
                 </button>
                 <button
                   type="button"
-                  onClick={confirmDelete}
+                  onClick={() => void confirmDelete()}
                   className="h-11 rounded-2xl bg-rose-500 text-white text-[13px] font-semibold"
                 >
                   Delete
@@ -866,7 +849,7 @@ export const RecurringPaymentsScreen: React.FC = () => {
         subtitle={`${schedulePreview.label} · Next ${schedulePreview.nextRun}`}
         amount={parseFloat(amountStr.replace(/,/g, '')) || undefined}
         recipient={recipientName}
-        onSuccess={handlePinSuccess}
+        onSuccess={pin => void handlePinSuccess(pin)}
       />
     </main>
   );

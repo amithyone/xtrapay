@@ -1,6 +1,19 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useTransactions } from '../../context/TransactionContext';
+import { apiCashflowAnalytics, apiCreateStatement, type AppCashflowAnalytics } from '../../lib/xtrapayApi';
 import { Icon } from '../Icon';
+
+const moneyCompact = (n: number) => {
+  if (!Number.isFinite(n)) return '₦0';
+  if (Math.abs(n) >= 1_000_000) return `₦${(n / 1_000_000).toFixed(2)}M`;
+  if (Math.abs(n) >= 1_000) return `₦${(n / 1_000).toFixed(1)}k`;
+  return `₦${n.toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
+};
+
+const moneyFull = (n: number) => {
+  if (!Number.isFinite(n)) return '₦0.00';
+  return `₦${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+};
 
 export const UtilityScreen: React.FC = () => {
   const {
@@ -8,54 +21,73 @@ export const UtilityScreen: React.FC = () => {
     setAccountContext,
     showToast,
     setActiveScreen,
-    payBill,
-    balance,
+    openPayBills,
+    personalBalance,
+    businessBalance,
   } = useTransactions();
 
   const [period, setPeriod] = useState<'30' | '90' | '365'>('30');
   const [analyticsTab, setAnalyticsTab] = useState<'distribution' | 'velocity' | 'categories'>(
     'distribution'
   );
-  const [quickPhone] = useState<string>('0803 123 4567');
-  const [selectedDataPack, setSelectedDataPack] = useState<string>('2500');
+  const [metrics, setMetrics] = useState<AppCashflowAnalytics | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  const exportStatement = () => {
-    showToast(
-      'Audit Statement Generated',
-      `Official Xtrapay certified e-Statement (${period === '30' ? '30 Days' : period === '90' ? 'Quarterly' : 'Annual'}) exported with digital cryptographic ledger seal.`,
-      'success'
-    );
-  };
-
-  const handleInstantRecharge = (service: string, amount: number) => {
-    try {
-      const token = payBill({
-        billerName: service,
-        provider: service.includes('MTN')
-          ? 'MTN Nigeria'
-          : service.includes('Electricity')
-            ? 'IKEDC'
-            : 'Multichoice',
-        accountOrMeter: service.includes('Electricity') ? '4509-2219-01' : quickPhone,
-        amount,
-        category: service.includes('Electricity') ? 'electricity' : 'airtime',
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    void apiCashflowAnalytics({ context: accountContext, periodDays: period })
+      .then(data => {
+        if (!cancelled) setMetrics(data);
+      })
+      .catch(() => {
+        if (!cancelled) setMetrics(null);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
       });
+    return () => {
+      cancelled = true;
+    };
+  }, [accountContext, period]);
+
+  const liveBalance =
+    accountContext === 'personal'
+      ? Number(personalBalance) || 0
+      : Number(businessBalance) || 0;
+  const netBalance = Number.isFinite(metrics?.netBalance)
+    ? (metrics!.netBalance as number)
+    : liveBalance;
+  const balanceWhole = Math.floor(Math.abs(netBalance));
+  const balanceFrac = (Math.abs(netBalance) % 1).toFixed(2).slice(2);
+
+  const ringOffset = useMemo(() => {
+    const score = Math.min(100, Math.max(0, metrics?.healthScorePct ?? 0));
+    return 251.2 * (1 - score / 100);
+  }, [metrics?.healthScorePct]);
+
+  const exportStatement = async () => {
+    try {
+      const res = await apiCreateStatement({
+        kind: accountContext === 'business' ? 'business' : 'wallet',
+        period,
+        format: 'pdf',
+        context: accountContext,
+      });
+      const url = res.downloadUrl ?? res.download_url ?? res.url;
+      if (url) window.open(url, '_blank', 'noopener,noreferrer');
       showToast(
-        'Recharge Successful',
-        `Processed ₦${amount.toLocaleString()} for ${service}. ${token ? `Token: ${token}` : ''}`,
+        'Statement ready',
+        `Cash-flow export (${period === '30' ? '30 Days' : period === '90' ? 'Quarterly' : 'Annual'}).`,
         'success'
       );
     } catch {
-      showToast('Transaction Failed', 'Insufficient balance or network error.', 'warning');
+      showToast('Export failed', 'Could not generate statement right now.', 'warning');
     }
   };
 
-  const balanceWhole =
-    accountContext === 'personal' ? Math.floor(balance) : 8420000;
-  const balanceFrac =
-    accountContext === 'personal'
-      ? (balance % 1).toFixed(2).slice(2)
-      : '00';
+  const channelTotal =
+    metrics?.channels.reduce((s, c) => s + c.amount, 0) || metrics?.totalOutflow || 0;
 
   return (
     <main className="flex-1 min-w-0 px-5 pt-5 pb-28 space-y-5" id="utility-screen">
@@ -75,7 +107,7 @@ export const UtilityScreen: React.FC = () => {
         </div>
         <button
           type="button"
-          onClick={exportStatement}
+          onClick={() => void exportStatement()}
           className="glass-chip !rounded-2xl !px-3 !py-2 text-[11px] font-semibold text-[var(--text)] flex items-center gap-1.5 active:scale-[0.98] transition-transform shrink-0"
           title="Export Certified PDF"
         >
@@ -119,12 +151,14 @@ export const UtilityScreen: React.FC = () => {
             </p>
             <span className="glass-chip !rounded-full !px-2 !py-0.5 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-              Optimal flow
+              {metrics?.healthLabel || (loading ? 'Loading…' : 'No data')}
             </span>
           </div>
           <div className="text-[11px] font-mono text-[var(--muted)]">
-            30D{' '}
-            <span className="font-bold text-emerald-600 dark:text-emerald-400">94.2%</span>
+            {period}D{' '}
+            <span className="font-bold text-emerald-600 dark:text-emerald-400">
+              {(metrics?.healthScorePct ?? 0).toFixed(1)}%
+            </span>
           </div>
         </div>
 
@@ -147,24 +181,16 @@ export const UtilityScreen: React.FC = () => {
                 className="stroke-emerald-500"
                 strokeWidth="9"
                 strokeDasharray="251.2"
-                strokeDashoffset="75"
-                strokeLinecap="round"
-              />
-              <circle
-                cx="50"
-                cy="50"
-                r="30"
-                fill="none"
-                className="stroke-[var(--accent)]"
-                strokeWidth="6"
-                strokeDasharray="188.4"
-                strokeDashoffset="60"
+                strokeDashoffset={ringOffset}
                 strokeLinecap="round"
               />
             </svg>
             <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
               <span className="text-[9px] uppercase font-bold text-[var(--muted)]">Margin</span>
-              <span className="text-xs font-mono font-bold text-[var(--text)]">+5.7%</span>
+              <span className="text-xs font-mono font-bold text-[var(--text)]">
+                {(metrics?.marginPct ?? 0) >= 0 ? '+' : ''}
+                {(metrics?.marginPct ?? 0).toFixed(1)}%
+              </span>
             </div>
           </div>
 
@@ -191,7 +217,10 @@ export const UtilityScreen: React.FC = () => {
             </div>
             <div className="text-[11px] text-[var(--muted)] flex items-center gap-1.5">
               <Icon name="speed" size={14} className="text-emerald-600 dark:text-emerald-400" />
-              <span>Burn velocity: ₦74.5k/day • 42d runway</span>
+              <span>
+                Burn velocity: {moneyCompact(metrics?.burnPerDay ?? 0)}/day •{' '}
+                {metrics?.runwayDays ?? 0}d runway
+              </span>
             </div>
           </div>
         </div>
@@ -205,9 +234,14 @@ export const UtilityScreen: React.FC = () => {
               <Icon name="arrow_downward" size={14} className="text-emerald-600 dark:text-emerald-400" />
             </div>
             <div className="font-mono text-sm font-bold text-emerald-700 dark:text-emerald-400">
-              ₦2,369,550<span className="text-[10px] opacity-75">.00</span>
+              {moneyFull(metrics?.totalInflow ?? 0)}
             </div>
-            <div className="text-[10px] mt-0.5 text-[var(--muted)]">103 settled credits (+18.4%)</div>
+            <div className="text-[10px] mt-0.5 text-[var(--muted)]">
+              {metrics?.inflowCount ?? 0} settled credits
+              {(metrics?.inflowChangePct ?? 0) !== 0
+                ? ` (${(metrics!.inflowChangePct >= 0 ? '+' : '') + metrics!.inflowChangePct.toFixed(1)}%)`
+                : ''}
+            </div>
           </div>
           <div className="rounded-2xl border border-[var(--glass-border)] bg-rose-500/8 px-3 py-2.5">
             <div className="flex items-center justify-between mb-1">
@@ -217,9 +251,11 @@ export const UtilityScreen: React.FC = () => {
               <Icon name="arrow_upward" size={14} className="text-rose-600 dark:text-rose-400" />
             </div>
             <div className="font-mono text-sm font-bold text-rose-600 dark:text-rose-400">
-              ₦2,234,961<span className="text-[10px] opacity-75">.53</span>
+              {moneyFull(metrics?.totalOutflow ?? 0)}
             </div>
-            <div className="text-[10px] mt-0.5 text-[var(--muted)]">76 authorized payments</div>
+            <div className="text-[10px] mt-0.5 text-[var(--muted)]">
+              {metrics?.outflowCount ?? 0} authorized payments
+            </div>
           </div>
         </div>
       </section>
@@ -266,29 +302,56 @@ export const UtilityScreen: React.FC = () => {
               <p className="text-[10px] font-medium uppercase tracking-[0.22em] text-[var(--muted)]">
                 Outflow channel breakdown
               </p>
-              <span className="text-xs font-mono font-bold text-[var(--text)]">₦2,234,961.53</span>
+              <span className="text-xs font-mono font-bold text-[var(--text)]">
+                {moneyFull(channelTotal)}
+              </span>
             </div>
-            <div className="w-full h-3 rounded-full overflow-hidden flex bg-black/5 dark:bg-white/5">
-              <div style={{ width: '67.5%' }} className="bg-[var(--accent)]" title="Bank Transfers (67.5%)" />
-              <div style={{ width: '26.6%' }} className="bg-cyan-500" title="P2P Settlement (26.6%)" />
-              <div style={{ width: '5.9%' }} className="bg-emerald-500" title="Cards & Utility (5.9%)" />
-            </div>
-            <div className="grid grid-cols-3 gap-2 text-xs">
-              {[
-                { label: 'Transfers', pct: '67.5%', amt: '₦1.50M', dot: 'bg-[var(--accent)]' },
-                { label: 'P2P direct', pct: '26.6%', amt: '₦596.1k', dot: 'bg-cyan-500' },
-                { label: 'Cards/bills', pct: '5.9%', amt: '₦131.2k', dot: 'bg-emerald-500' },
-              ].map(row => (
-                <div key={row.label} className="space-y-0.5">
-                  <div className="flex items-center gap-1">
-                    <span className={`w-2 h-2 rounded-full ${row.dot}`} />
-                    <span className="text-[11px] font-medium text-[var(--muted)]">{row.label}</span>
-                  </div>
-                  <div className="font-mono font-bold text-xs text-[var(--text)]">{row.pct}</div>
-                  <div className="text-[10px] font-mono text-[var(--muted)]">{row.amt}</div>
+            {(metrics?.channels.length ?? 0) === 0 ? (
+              <p className="text-[12px] text-[var(--muted)] py-4 text-center">
+                {loading ? 'Loading channels…' : 'No channel data for this period.'}
+              </p>
+            ) : (
+              <>
+                <div className="w-full h-3 rounded-full overflow-hidden flex bg-black/5 dark:bg-white/5">
+                  {metrics!.channels.map((c, i) => (
+                    <div
+                      key={c.label}
+                      style={{ width: `${Math.max(0, c.pct)}%` }}
+                      className={
+                        i === 0 ? 'bg-[var(--accent)]' : i === 1 ? 'bg-cyan-500' : 'bg-emerald-500'
+                      }
+                      title={`${c.label} (${c.pct}%)`}
+                    />
+                  ))}
                 </div>
-              ))}
-            </div>
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  {metrics!.channels.slice(0, 3).map((row, i) => (
+                    <div key={row.label} className="space-y-0.5">
+                      <div className="flex items-center gap-1">
+                        <span
+                          className={`w-2 h-2 rounded-full ${
+                            i === 0
+                              ? 'bg-[var(--accent)]'
+                              : i === 1
+                                ? 'bg-cyan-500'
+                                : 'bg-emerald-500'
+                          }`}
+                        />
+                        <span className="text-[11px] font-medium text-[var(--muted)] truncate">
+                          {row.label}
+                        </span>
+                      </div>
+                      <div className="font-mono font-bold text-xs text-[var(--text)]">
+                        {row.pct.toFixed(1)}%
+                      </div>
+                      <div className="text-[10px] font-mono text-[var(--muted)]">
+                        {moneyCompact(row.amount)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
         )}
 
@@ -299,68 +362,70 @@ export const UtilityScreen: React.FC = () => {
                 7-day settlement velocity
               </p>
               <span className="text-[11px] font-mono font-semibold text-emerald-600 dark:text-emerald-400">
-                Avg: ₦74,498 / day
+                Avg: {moneyFull(metrics?.velocityAvgPerDay ?? 0)} / day
               </span>
             </div>
-            <div className="grid grid-cols-7 gap-1.5 items-end h-20 pt-2">
-              {[
-                { day: 'Mon', h: 55, amt: '₦62k' },
-                { day: 'Tue', h: 80, amt: '₦91k' },
-                { day: 'Wed', h: 45, amt: '₦48k' },
-                { day: 'Thu', h: 95, amt: '₦114k' },
-                { day: 'Fri', h: 65, amt: '₦77k' },
-                { day: 'Sat', h: 35, amt: '₦39k' },
-                { day: 'Sun', h: 70, amt: '₦82k' },
-              ].map(bar => (
-                <div key={bar.day} className="flex flex-col items-center gap-1 group">
-                  <div
-                    className={`w-full rounded-t-md transition-all group-hover:opacity-80 ${
-                      bar.day === 'Thu'
-                        ? 'bg-[var(--accent)]'
-                        : 'bg-black/10 dark:bg-white/10'
-                    }`}
-                    style={{ height: `${bar.h}%` }}
-                    title={`${bar.day}: ${bar.amt}`}
-                  />
-                  <span
-                    className={`text-[10px] font-mono ${
-                      bar.day === 'Thu'
-                        ? 'text-[var(--accent)] font-bold'
-                        : 'text-[var(--muted)]'
-                    }`}
-                  >
-                    {bar.day}
-                  </span>
-                </div>
-              ))}
-            </div>
+            {(metrics?.velocityDays.length ?? 0) === 0 ? (
+              <p className="text-[12px] text-[var(--muted)] py-6 text-center">
+                {loading ? 'Loading velocity…' : 'No velocity series yet.'}
+              </p>
+            ) : (
+              <div className="grid grid-cols-7 gap-1.5 items-end h-20 pt-2">
+                {metrics!.velocityDays.slice(0, 7).map((bar, idx) => {
+                  const peak = Math.max(...metrics!.velocityDays.map(d => d.amount), 1);
+                  const isPeak = bar.amount === peak;
+                  const h = bar.heightPct || Math.round((bar.amount / peak) * 100);
+                  return (
+                    <div key={`${bar.day}-${idx}`} className="flex flex-col items-center gap-1 group">
+                      <div
+                        className={`w-full rounded-t-md transition-all group-hover:opacity-80 ${
+                          isPeak ? 'bg-[var(--accent)]' : 'bg-black/10 dark:bg-white/10'
+                        }`}
+                        style={{ height: `${Math.max(8, h)}%` }}
+                        title={`${bar.day}: ${moneyCompact(bar.amount)}`}
+                      />
+                      <span
+                        className={`text-[10px] font-mono ${
+                          isPeak ? 'text-[var(--accent)] font-bold' : 'text-[var(--muted)]'
+                        }`}
+                      >
+                        {bar.day.slice(0, 3)}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
 
         {analyticsTab === 'categories' && (
           <div className="glass-card glass-strong !rounded-[24px] px-5 py-4 space-y-2.5">
-            {[
-              { label: 'Merchant Invoices & Supplies', amount: '₦940,200', pct: 42, icon: 'receipt_long' },
-              { label: 'Bank Peer-to-Peer Transfers', amount: '₦682,100', pct: 30, icon: 'swap_horiz' },
-              { label: 'Data, Telephony & Power', amount: '₦345,600', pct: 15, icon: 'bolt' },
-              { label: 'POS Terminal & Cash Outflow', amount: '₦267,061', pct: 13, icon: 'point_of_sale' },
-            ].map(cat => (
-              <div key={cat.label} className="space-y-1">
-                <div className="flex items-center justify-between text-xs gap-2">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <Icon name={cat.icon} size={15} className="text-[var(--accent)] shrink-0" />
-                    <span className="font-medium text-[var(--text)] truncate">{cat.label}</span>
+            {(metrics?.categories.length ?? 0) === 0 ? (
+              <p className="text-[12px] text-[var(--muted)] py-4 text-center">
+                {loading ? 'Loading categories…' : 'No category spend yet.'}
+              </p>
+            ) : (
+              metrics!.categories.map(cat => (
+                <div key={cat.label} className="space-y-1">
+                  <div className="flex items-center justify-between text-xs gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Icon name={cat.icon} size={15} className="text-[var(--accent)] shrink-0" />
+                      <span className="font-medium text-[var(--text)] truncate">{cat.label}</span>
+                    </div>
+                    <span className="font-mono font-semibold text-[var(--text)] shrink-0">
+                      {moneyFull(cat.amount)}
+                    </span>
                   </div>
-                  <span className="font-mono font-semibold text-[var(--text)] shrink-0">{cat.amount}</span>
+                  <div className="w-full h-1.5 rounded-full overflow-hidden bg-black/5 dark:bg-white/5">
+                    <div
+                      className="h-full rounded-full bg-[var(--accent)]"
+                      style={{ width: `${Math.min(100, Math.max(0, cat.pct))}%` }}
+                    />
+                  </div>
                 </div>
-                <div className="w-full h-1.5 rounded-full overflow-hidden bg-black/5 dark:bg-white/5">
-                  <div
-                    className="h-full rounded-full bg-[var(--accent)]"
-                    style={{ width: `${cat.pct}%` }}
-                  />
-                </div>
-              </div>
-            ))}
+              ))
+            )}
           </div>
         )}
       </section>
@@ -372,7 +437,7 @@ export const UtilityScreen: React.FC = () => {
               Quick utility payments
             </p>
             <span className="glass-chip !rounded-full !px-2 !py-0.5 text-[10px] font-semibold text-[var(--accent)]">
-              Instant payments
+              Live VTU
             </span>
           </div>
           <button
@@ -385,102 +450,32 @@ export const UtilityScreen: React.FC = () => {
           </button>
         </div>
 
-        <div className="space-y-2.5">
-          <div className="glass-card glass-strong !rounded-[20px] px-4 py-3.5 space-y-2.5">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2.5 min-w-0">
-                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">
-                  <Icon name="wifi" size={17} />
-                </span>
-                <div className="min-w-0">
-                  <p className="text-[12px] font-bold text-[var(--text)]">MTN 5G Broadband / Voice</p>
-                  <p className="text-[11px] font-mono text-[var(--muted)] truncate">
-                    {quickPhone} • High-speed auto-renew
-                  </p>
-                </div>
-              </div>
-              <span className="glass-chip !rounded-full !px-2 !py-0.5 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 shrink-0">
-                Active
-              </span>
-            </div>
-            <div className="grid grid-cols-3 gap-1.5">
-              {[
-                { pack: '1.5 GB', price: 1000, val: '1000' },
-                { pack: '4.5 GB', price: 2500, val: '2500' },
-                { pack: '12 GB', price: 5000, val: '5000' },
-              ].map(item => (
-                <button
-                  key={item.val}
-                  type="button"
-                  onClick={() => {
-                    setSelectedDataPack(item.val);
-                    handleInstantRecharge('MTN 5G Data Refill', item.price);
-                  }}
-                  className={`py-2 px-1.5 rounded-xl border text-center transition-all active:scale-[0.98] ${
-                    selectedDataPack === item.val
-                      ? 'bg-[var(--accent)]/15 border-[var(--accent)] text-[var(--accent)] font-bold'
-                      : 'border-[var(--glass-border)] bg-black/[0.03] dark:bg-white/[0.05] text-[var(--text)]'
-                  }`}
-                >
-                  <div className="text-[11px] font-bold">{item.pack}</div>
-                  <div className="text-[10px] font-mono opacity-85">₦{item.price.toLocaleString()}</div>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="glass-card glass-strong !rounded-[20px] px-4 py-3.5 flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2.5 min-w-0">
-              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-yellow-500/15 text-yellow-600 dark:text-yellow-400">
-                <Icon name="bolt" size={18} />
-              </span>
-              <div className="min-w-0">
-                <p className="text-[12px] font-bold text-[var(--text)]">IKEDC Prepaid Meter</p>
-                <p className="text-[11px] font-mono text-[var(--muted)]">
-                  Meter #4509-2219-01 • Ikeja Electric
-                </p>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => handleInstantRecharge('IKEDC Electricity Meter', 3000)}
-              className="shrink-0 py-2 px-3 rounded-2xl text-[11px] font-bold bg-[var(--accent)]/15 text-[var(--accent)] border border-[var(--accent)]/30 active:scale-[0.98] transition-transform"
-            >
-              +₦3,000 vend
-            </button>
-          </div>
-
-          <div className="glass-card glass-strong !rounded-[20px] px-4 py-3.5 flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2.5 min-w-0">
-              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-sky-500/15 text-sky-600 dark:text-sky-400">
-                <Icon name="tv" size={17} />
-              </span>
-              <div className="min-w-0">
-                <p className="text-[12px] font-bold text-[var(--text)]">DStv Premium &amp; Showmax</p>
-                <p className="text-[11px] text-[var(--muted)]">
-                  Smartcard #102948102 • Due in 5 days
-                </p>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => setActiveScreen('paybills')}
-              className="shrink-0 py-2 px-3 rounded-2xl glass-chip !rounded-2xl text-[11px] font-semibold text-[var(--text)] active:scale-[0.98] transition-transform"
-            >
-              Renew
-            </button>
-          </div>
+        <div className="grid grid-cols-3 gap-2.5">
+          <button
+            type="button"
+            onClick={() => setActiveScreen('airtime')}
+            className="settings-row glass-card glass-strong !rounded-[20px] px-3 py-4 text-center appearance-none border-0 cursor-pointer"
+          >
+            <Icon name="smartphone" size={18} className="mx-auto text-[var(--accent)]" />
+            <p className="mt-2 text-[11px] font-semibold text-[var(--text)]">Airtime</p>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveScreen('data')}
+            className="settings-row glass-card glass-strong !rounded-[20px] px-3 py-4 text-center appearance-none border-0 cursor-pointer"
+          >
+            <Icon name="wifi" size={18} className="mx-auto text-[var(--accent)]" />
+            <p className="mt-2 text-[11px] font-semibold text-[var(--text)]">Data</p>
+          </button>
+          <button
+            type="button"
+            onClick={() => openPayBills('electricity')}
+            className="settings-row glass-card glass-strong !rounded-[20px] px-3 py-4 text-center appearance-none border-0 cursor-pointer"
+          >
+            <Icon name="bolt" size={18} className="mx-auto text-[var(--accent)]" />
+            <p className="mt-2 text-[11px] font-semibold text-[var(--text)]">Power</p>
+          </button>
         </div>
-      </section>
-
-      <section className="glass-chip !rounded-[18px] px-4 py-3 text-center">
-        <div className="flex items-center justify-center gap-1.5 text-[11px] text-[var(--text)]">
-          <Icon name="verified_user" size={14} className="text-emerald-600 dark:text-emerald-400" />
-          <span className="font-medium">NIBSS &amp; NDIC insured settlement infrastructure</span>
-        </div>
-        <p className="text-[10px] font-mono text-[var(--muted)] mt-0.5">
-          SHA-256 stamp: 0x8b32e9a...7c91 • Audited in real-time
-        </p>
       </section>
     </main>
   );

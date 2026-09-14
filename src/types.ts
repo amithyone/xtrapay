@@ -9,6 +9,8 @@ export type ScreenType =
   | 'transfer'
   | 'receive'
   | 'paybills'
+  | 'airtime'
+  | 'data'
   | 'ask_money'
   | 'save_together'
   | 'terminals'
@@ -18,8 +20,10 @@ export type ScreenType =
   | 'privacy'
   | 'checkoutnow'
   | 'statement'
+  | 'settlement'
   | 'recurring'
   | 'sub_accounts'
+  | 'business_accounts'
   | 'loans'
   | 'limits'
   | 'support'
@@ -168,6 +172,36 @@ export interface GroupPot {
   myContribution: number;
   frequency: string;
   members: PotMember[];
+}
+
+/** Personal savings vault plans */
+export type SavingsPlanType = 'flexible' | 'fixed' | 'spend_and_save';
+
+export interface SavingsPlan {
+  id: string;
+  name: string;
+  type: SavingsPlanType;
+  balance: number;
+  /** Target for fixed plans */
+  targetAmount?: number;
+  /** Auto-save % for spend_and_save (1–100) */
+  percentage?: number;
+  apy?: number;
+  maturityDate?: string;
+  status: 'Active' | 'Matured' | 'Paused';
+  createdAt?: string;
+  interestEarned?: number;
+}
+
+export interface SavingsSummary {
+  flexibleBalance: number;
+  strictBalance: number;
+  strictAutoSave: boolean;
+  totalBalance?: number;
+  blendedApy?: number;
+  interestToday?: number;
+  lifetimeInterest?: number;
+  plans: SavingsPlan[];
 }
 
 export interface NearbyPeer {

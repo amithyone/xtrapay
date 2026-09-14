@@ -71,12 +71,7 @@ export const ServicesScreen: React.FC = () => {
     {
       label: 'Settlement',
       icon: 'account_balance',
-      onClick: () =>
-        showToast(
-          'Settlement',
-          'Next settlement window posts to Zenith · Providus at 6:00 PM WAT.',
-          'info'
-        ),
+      onClick: () => setActiveScreen('settlement'),
     },
     {
       label: 'Utilities',
@@ -97,6 +92,11 @@ export const ServicesScreen: React.FC = () => {
       label: 'Recurring',
       icon: 'autorenew',
       onClick: () => setActiveScreen('recurring'),
+    },
+    {
+      label: 'Business',
+      icon: 'domain',
+      onClick: () => setActiveScreen('business_accounts'),
     },
     {
       label: 'Sub-accounts',

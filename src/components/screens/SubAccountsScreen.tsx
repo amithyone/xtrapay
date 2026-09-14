@@ -1,11 +1,12 @@
 import React, { useMemo, useState } from 'react';
 import { useTransactions } from '../../context/TransactionContext';
+import { ApiError } from '../../lib/api';
+import { apiCreateSubAccount } from '../../lib/xtrapayApi';
 import { Icon } from '../Icon';
 import { PinSheetModal } from '../common/PinSheetModal';
-import type { WalletAccount, WalletKind } from '../../data/wallets';
 
 type ViewMode = 'list' | 'create';
-type CreateKind = 'sub_personal' | 'sub_business';
+type SubKind = 'sub_personal' | 'sub_business';
 
 const money = (n: number) =>
   `₦${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -15,11 +16,22 @@ const money = (n: number) =>
  * created from the verified parent profile (no new KYC registration).
  */
 export const SubAccountsScreen: React.FC = () => {
-  const { accountContext, showToast, wallets, addWallet, selectWallet } = useTransactions();
+  const {
+    accountContext,
+    showToast,
+    wallets,
+    addWallet,
+    selectWallet,
+    userProfile,
+    accountTier,
+    accountFullName,
+    refreshBalances,
+  } = useTransactions();
   const isBusinessParent = accountContext === 'business';
 
   const [view, setView] = useState<ViewMode>('list');
   const [pinOpen, setPinOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
 
   const subAccounts = wallets.filter(
     w => w.kind === 'sub_personal' || w.kind === 'sub_business'
@@ -27,23 +39,29 @@ export const SubAccountsScreen: React.FC = () => {
 
   const [name, setName] = useState('');
   const [purpose, setPurpose] = useState('');
-  const [kind, setKind] = useState<CreateKind>(
+  const [kind, setKind] = useState<SubKind>(
     isBusinessParent ? 'sub_business' : 'sub_personal'
   );
 
-  const parentProfile = useMemo(
-    () => ({
-      fullName: 'Innocent Solomon',
-      phone: '+234 803 412 9981',
-      email: 'innocent.solomon@xtrapay.ng',
-      tier: 'Tier 3',
-      bvn: '221*****8841',
-      nin: '123*******9012',
-      customerId: isBusinessParent ? 'BZ-1003925' : 'AG-1003925',
+  const parentProfile = useMemo(() => {
+    const fullName =
+      userProfile?.fullName || accountFullName || 'Verified account holder';
+    const phone = userProfile?.phone || '—';
+    const tier = userProfile?.tier || accountTier || 'Tier 3';
+    return {
+      fullName,
+      phone,
+      email: userProfile?.email || '—',
+      tier,
+      bvn: userProfile?.kyc?.bvnMasked || '—',
+      nin: userProfile?.kyc?.ninMasked || '—',
+      customerId:
+        userProfile?.customerId ||
+        (isBusinessParent ? '—' : '—'),
       parentLabel: isBusinessParent ? 'Business profile' : 'Personal wallet',
-    }),
-    [isBusinessParent]
-  );
+      kycStatus: userProfile?.kyc?.status || 'verified',
+    };
+  }, [userProfile, accountFullName, accountTier, isBusinessParent]);
 
   const fieldClass =
     'w-full h-12 px-4 rounded-2xl bg-black/[0.04] dark:bg-white/[0.06] border border-[var(--glass-border)] text-[var(--text)] text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]/25 transition-all placeholder:text-[var(--muted)]';
@@ -67,27 +85,35 @@ export const SubAccountsScreen: React.FC = () => {
     setPinOpen(true);
   };
 
-  const handlePinSuccess = () => {
-    const walletKind: WalletKind = kind;
-    const next: WalletAccount = {
-      id: `sub-${Date.now()}`,
-      name: name.trim(),
-      kind: walletKind,
-      accountNumber: `0${Math.floor(100000000 + Math.random() * 899999999)}`,
-      bankName: kind === 'sub_business' ? 'Providus Bank' : 'Zenith Bank',
-      balance: 0,
-      subtitle:
-        kind === 'sub_business' ? 'Sub-account · Mini business' : 'Sub-account · Personal',
-    };
-    addWallet(next);
-    selectWallet(next.id);
-    setPinOpen(false);
-    setView('list');
-    showToast(
-      'Sub-Account Created',
-      `${next.name} · ${next.accountNumber} opened under your verified ${parentProfile.parentLabel.toLowerCase()}.`,
-      'success'
-    );
+  const handlePinSuccess = async (pin: string) => {
+    setBusy(true);
+    try {
+      const next = await apiCreateSubAccount({
+        kind,
+        name: name.trim(),
+        purpose: purpose.trim(),
+        pin,
+        parentContext: isBusinessParent ? 'business' : 'personal',
+      });
+      addWallet(next);
+      selectWallet(next.id);
+      void refreshBalances();
+      setPinOpen(false);
+      setView('list');
+      showToast(
+        'Sub-Account Created',
+        `${next.name} · ${next.accountNumber} opened under your verified ${parentProfile.parentLabel.toLowerCase()}.`,
+        'success'
+      );
+    } catch (err) {
+      showToast(
+        'Create failed',
+        err instanceof ApiError ? err.message : 'Could not create sub-account.',
+        'warning'
+      );
+    } finally {
+      setBusy(false);
+    }
   };
 
   if (view === 'list') {
@@ -297,10 +323,10 @@ export const SubAccountsScreen: React.FC = () => {
 
       <PinSheetModal
         isOpen={pinOpen}
-        onClose={() => setPinOpen(false)}
+        onClose={() => !busy && setPinOpen(false)}
         title="Authorize Sub-Account"
         subtitle={`Create ${kind === 'sub_business' ? 'mini business' : 'personal'} wallet under ${parentProfile.fullName}`}
-        onSuccess={handlePinSuccess}
+        onSuccess={pin => void handlePinSuccess(pin)}
       />
     </main>
   );

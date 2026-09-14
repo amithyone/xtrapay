@@ -53,6 +53,8 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
     activeScreen === 'transfer' ||
     activeScreen === 'receive' ||
     activeScreen === 'paybills' ||
+    activeScreen === 'airtime' ||
+    activeScreen === 'data' ||
     activeScreen === 'ask_money' ||
     activeScreen === 'save_together' ||
     activeScreen === 'terminals' ||
@@ -68,8 +70,10 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
     activeScreen === 'utility' ||
     activeScreen === 'history' ||
     activeScreen === 'statement' ||
+    activeScreen === 'settlement' ||
     activeScreen === 'recurring' ||
-    activeScreen === 'sub_accounts';
+    activeScreen === 'sub_accounts' ||
+    activeScreen === 'business_accounts';
 
   if (isSubScreen) {
     let screenTitle = title;
@@ -77,6 +81,8 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
       if (activeScreen === 'transfer') screenTitle = 'Transfer Funds';
       else if (activeScreen === 'receive') screenTitle = 'Receive Funds';
       else if (activeScreen === 'paybills') screenTitle = 'Pay Bills';
+      else if (activeScreen === 'airtime') screenTitle = 'Buy airtime';
+      else if (activeScreen === 'data') screenTitle = 'Buy data';
       else if (activeScreen === 'ask_money') screenTitle = 'Request for money';
       else if (activeScreen === 'save_together') screenTitle = 'Group savings';
       else if (activeScreen === 'terminals') screenTitle = 'Terminal Management';
@@ -92,8 +98,10 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
       else if (activeScreen === 'utility') screenTitle = 'Utilities & Analytics';
       else if (activeScreen === 'history') screenTitle = 'Transaction History';
       else if (activeScreen === 'statement') screenTitle = 'Statements';
+      else if (activeScreen === 'settlement') screenTitle = 'Settlement';
       else if (activeScreen === 'recurring') screenTitle = 'Recurring Payments';
       else if (activeScreen === 'sub_accounts') screenTitle = 'Sub-Accounts';
+      else if (activeScreen === 'business_accounts') screenTitle = 'Business Accounts';
     }
 
     return (

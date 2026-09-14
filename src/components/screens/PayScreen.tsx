@@ -13,7 +13,6 @@ export const PayScreen: React.FC = () => {
   const {
     setActiveScreen,
     transactions,
-    showToast,
     theme,
     dailySpent,
     dailyLimit,
@@ -50,21 +49,15 @@ export const PayScreen: React.FC = () => {
       icon: 'smartphone',
       pad: isLight ? 'bg-amber-500/15' : 'bg-amber-500/20',
       tint: isLight ? 'text-amber-700' : 'text-amber-300',
-      onClick: () => {
-        setActiveScreen('paybills');
-        showToast('Airtime', 'Pick a network and top up instantly.', 'info');
-      },
+      onClick: () => setActiveScreen('airtime'),
     },
     {
-      label: 'Internet',
-      hint: 'Data bundles & broadband',
+      label: 'Data',
+      hint: 'Mobile data bundles',
       icon: 'wifi',
       pad: isLight ? 'bg-sky-500/15' : 'bg-sky-500/20',
       tint: isLight ? 'text-sky-700' : 'text-sky-300',
-      onClick: () => {
-        setActiveScreen('paybills');
-        showToast('Internet & Data', 'Buy mobile data or broadband plans.', 'info');
-      },
+      onClick: () => setActiveScreen('data'),
     },
     {
       label: 'Pay bills',
@@ -78,16 +71,6 @@ export const PayScreen: React.FC = () => {
 
   return (
     <main className="flex-1 min-w-0 px-5 pt-5 pb-32 space-y-4" id="pay-screen">
-      <header className="glass-card glass-strong settings-list !rounded-[24px] px-4 py-3.5">
-        <p className="text-[10px] uppercase tracking-[0.24em] text-[var(--muted)]">Payments</p>
-        <h1 className="mt-1.5 text-[18px] font-semibold text-[var(--text)] tracking-tight">
-          Pay
-        </h1>
-        <p className="mt-1 text-[12px] text-[var(--muted)] leading-snug">
-          Send money, buy airtime &amp; data, and clear bills in one place.
-        </p>
-      </header>
-
       <section className="glass-card glass-strong settings-list !rounded-[24px] px-4 py-4">
         <div className="flex items-center justify-between gap-3">
           <div>

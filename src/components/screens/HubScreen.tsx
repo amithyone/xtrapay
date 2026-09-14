@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useTransactions } from '../../context/TransactionContext';
 import { Icon } from '../Icon';
-import { PinSheetModal } from '../common/PinSheetModal';
 import {
   animateRubberRelease,
   clampScrollWithRubber,
@@ -33,7 +32,6 @@ export const HubScreen: React.FC = () => {
   } = useTransactions();
 
   const isLight = theme === 'light';
-  const [isPosPinOpen, setIsPosPinOpen] = useState(false);
   const refreshBalancesRef = useRef(refreshBalances);
   refreshBalancesRef.current = refreshBalances;
 
@@ -174,6 +172,20 @@ export const HubScreen: React.FC = () => {
       onClick: () => setActiveScreen('pay'),
     },
     {
+      label: 'Airtime',
+      icon: 'smartphone',
+      tint: isLight ? 'text-amber-700' : 'text-white',
+      pad: 'bg-amber-500/18',
+      onClick: () => setActiveScreen('airtime'),
+    },
+    {
+      label: 'Data',
+      icon: 'sim_card',
+      tint: isLight ? 'text-sky-700' : 'text-white',
+      pad: 'bg-sky-500/18',
+      onClick: () => setActiveScreen('data'),
+    },
+    {
       label: 'History',
       icon: 'history',
       tint: isLight ? 'text-purple-600' : 'text-white',
@@ -206,7 +218,7 @@ export const HubScreen: React.FC = () => {
       icon: 'point_of_sale',
       tint: isLight ? 'text-rose-600' : 'text-white',
       pad: 'bg-rose-500/18',
-      onClick: () => setIsPosPinOpen(true),
+      onClick: () => setActiveScreen('terminals'),
     },
     {
       label: 'Services',
@@ -434,17 +446,6 @@ export const HubScreen: React.FC = () => {
           </span>
         </button>
       </section>
-
-      <PinSheetModal
-        isOpen={isPosPinOpen}
-        onClose={() => setIsPosPinOpen(false)}
-        title="Enter Security PIN"
-        subtitle="Authenticate to open Terminal Management"
-        onSuccess={() => {
-          setIsPosPinOpen(false);
-          setActiveScreen('terminals');
-        }}
-      />
     </main>
   );
 };

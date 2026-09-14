@@ -1,61 +1,114 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useTransactions } from '../../context/TransactionContext';
+import { ApiError } from '../../lib/api';
+import {
+  apiCardRequestQuote,
+  apiCards,
+  apiFreezeCard,
+  apiFundVirtualCard,
+  apiRequestCard,
+  mapApiCard,
+  type AppCard,
+  type AppCardRequestQuote,
+} from '../../lib/xtrapayApi';
 import { Icon } from '../Icon';
 import { PinSheetModal } from '../common/PinSheetModal';
 
 type CardKind = 'physical' | 'virtual';
 
 /**
- * Cards — Physical Naira card + Virtual USD card, with request flow.
+ * Cards — Physical Naira + Virtual USD. Empty = request only (no mock cards).
  */
 export const DollarCardScreen: React.FC = () => {
-  const { personalBalance, cardFrozen, setCardFrozen, showToast, theme } =
-    useTransactions();
+  const {
+    personalBalance,
+    accountFullName,
+    userProfile,
+    refreshBalances,
+    showToast,
+    theme,
+  } = useTransactions();
   const isLight = theme === 'light';
 
+  const [cards, setCards] = useState<AppCard[]>([]);
+  const [loading, setLoading] = useState(true);
   const [cardKind, setCardKind] = useState<CardKind>('physical');
   const [showDetails, setShowDetails] = useState(false);
-  const [usdBalance, setUsdBalance] = useState(3.6);
-  const [ngnBalance] = useState(485_200.5);
   const [fundAmountUsd, setFundAmountUsd] = useState('20');
   const [fundingOpen, setFundingOpen] = useState(false);
-
-  const [hasPhysical, setHasPhysical] = useState(true);
-  const [hasVirtual, setHasVirtual] = useState(true);
-  const [physicalFrozen, setPhysicalFrozen] = useState(false);
+  const [fundPinOpen, setFundPinOpen] = useState(false);
 
   const [requestOpen, setRequestOpen] = useState(false);
   const [requestKind, setRequestKind] = useState<CardKind>('physical');
   const [deliveryAddress, setDeliveryAddress] = useState(
-    '12 Admiralty Way, Lekki Phase 1, Lagos'
+    userProfile?.address || ''
   );
+  const [initialTopUpUsd, setInitialTopUpUsd] = useState('20');
+  const [requestQuote, setRequestQuote] = useState<AppCardRequestQuote | null>(null);
   const [requestPinOpen, setRequestPinOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
 
-  const fxRate = 1485.0;
-  const activeFrozen = cardKind === 'virtual' ? cardFrozen : physicalFrozen;
+  const cardholderFallback =
+    accountFullName || userProfile?.fullName || 'Cardholder';
+
+  const loadCards = async () => {
+    try {
+      const list = await apiCards();
+      setCards(Array.isArray(list) ? list : []);
+      const physical = list.find(
+        c => c.kind === 'physical' && (c.status === 'active' || c.status === 'frozen' || c.status === 'pending')
+      );
+      const virtual = list.find(
+        c =>
+          c.kind === 'virtual_usd' &&
+          (c.status === 'active' || c.status === 'frozen' || c.status === 'pending')
+      );
+      if (!physical && virtual) setCardKind('virtual');
+      else if (physical && !virtual) setCardKind('physical');
+    } catch {
+      setCards([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadCards();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (userProfile?.address && !deliveryAddress) {
+      setDeliveryAddress(userProfile.address);
+    }
+  }, [userProfile?.address, deliveryAddress]);
+
+  const physicalCard = useMemo(
+    () =>
+      cards.find(
+        c =>
+          c.kind === 'physical' &&
+          (c.status === 'active' || c.status === 'frozen' || c.status === 'pending')
+      ) || null,
+    [cards]
+  );
+  const virtualCard = useMemo(
+    () =>
+      cards.find(
+        c =>
+          c.kind === 'virtual_usd' &&
+          (c.status === 'active' || c.status === 'frozen' || c.status === 'pending')
+      ) || null,
+    [cards]
+  );
+
+  const hasAnyCard = Boolean(physicalCard || virtualCard);
+  const activeCard = cardKind === 'physical' ? physicalCard : virtualCard;
+  const ownsActive = Boolean(activeCard);
+  const activeFrozen = activeCard?.status === 'frozen';
 
   const fieldClass =
     'w-full h-12 px-4 rounded-2xl bg-black/[0.04] dark:bg-white/[0.06] border border-[var(--glass-border)] text-[var(--text)] text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]/25 transition-all placeholder:text-[var(--muted)]';
-
-  const handleFundCard = () => {
-    const amt = parseFloat(fundAmountUsd);
-    if (isNaN(amt) || amt <= 0) {
-      showToast('Invalid Amount', 'Enter valid USD amount.', 'warning');
-      return;
-    }
-    const nairaNeeded = amt * fxRate;
-    if (nairaNeeded > personalBalance) {
-      showToast(
-        'Insufficient Balance',
-        `You need ₦${nairaNeeded.toLocaleString()} in your personal wallet.`,
-        'warning'
-      );
-      return;
-    }
-    setUsdBalance(prev => prev + amt);
-    setFundingOpen(false);
-    showToast('Dollar Card Funded', `+$${amt} USD credited at ₦${fxRate}/$`);
-  };
 
   const openRequest = (kind: CardKind = cardKind) => {
     setRequestKind(kind);
@@ -67,45 +120,191 @@ export const DollarCardScreen: React.FC = () => {
       showToast('Address Required', 'Enter a delivery address for your physical card.', 'warning');
       return;
     }
+    if (requestKind === 'virtual') {
+      const usd = parseFloat(initialTopUpUsd);
+      const min = requestQuote?.minInitialTopUpUsd ?? 0;
+      if (isNaN(usd) || usd < min) {
+        showToast(
+          'Top-up required',
+          min > 0
+            ? `First top-up must be at least $${min.toFixed(2)} USD.`
+            : 'Enter a valid USD first top-up.',
+          'warning'
+        );
+        return;
+      }
+    }
+    if (requestQuote?.sufficientBalance === false) {
+      showToast(
+        'Insufficient balance',
+        `You need ₦${requestQuote.totalDebitNgn.toLocaleString()} for this request.`,
+        'warning'
+      );
+      return;
+    }
     setRequestOpen(false);
     setRequestPinOpen(true);
   };
 
-  const handleRequestSuccess = () => {
-    setRequestPinOpen(false);
-    if (requestKind === 'physical') {
-      setHasPhysical(true);
+  const handleRequestSuccess = async (pin: string) => {
+    setBusy(true);
+    try {
+      const usd = parseFloat(initialTopUpUsd);
+      const card = await apiRequestCard({
+        kind: requestKind === 'physical' ? 'physical' : 'virtual_usd',
+        deliveryAddress:
+          requestKind === 'physical' ? deliveryAddress.trim() : undefined,
+        initialTopUpUsd:
+          requestKind === 'virtual' && !isNaN(usd) ? usd : undefined,
+        pin,
+      });
+      setCards(prev => [card, ...prev.filter(c => c.id !== card.id)]);
+      setCardKind(requestKind);
+      setRequestPinOpen(false);
+      void refreshBalances();
       showToast(
-        'Physical Card Requested',
-        'Your Naira debit card will ship in 5–7 working days.',
+        requestKind === 'physical' ? 'Physical card requested' : 'Virtual USD card issued',
+        requestKind === 'physical'
+          ? 'Your Naira debit card request was submitted.'
+          : 'Your dollar card is being activated.',
         'success'
       );
-    } else {
-      setHasVirtual(true);
-      setCardKind('virtual');
+      void loadCards();
+    } catch (err) {
       showToast(
-        'Virtual USD Card Issued',
-        'Your dollar card is active for online spend.',
-        'success'
+        'Request failed',
+        err instanceof ApiError ? err.message : 'Could not request card.',
+        'warning'
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const setFrozen = async (next: boolean) => {
+    if (!activeCard) return;
+    try {
+      const updated = await apiFreezeCard(activeCard.id, next);
+      setCards(prev => prev.map(c => (c.id === updated.id ? updated : c)));
+      showToast(
+        'Card Security',
+        next ? 'Card frozen.' : 'Card active again.',
+        next ? 'warning' : 'success'
+      );
+    } catch (err) {
+      showToast(
+        'Freeze failed',
+        err instanceof ApiError ? err.message : 'Could not update card status.',
+        'warning'
       );
     }
   };
 
-  const setFrozen = (next: boolean) => {
-    if (cardKind === 'virtual') {
-      setCardFrozen(next);
-      showToast('Card Security', next ? 'Virtual USD card frozen.' : 'Virtual USD card active.');
-    } else {
-      setPhysicalFrozen(next);
-      showToast('Card Security', next ? 'Physical card frozen.' : 'Physical card active.');
+  const handleFundContinue = () => {
+    const amt = parseFloat(fundAmountUsd);
+    if (isNaN(amt) || amt <= 0) {
+      showToast('Invalid Amount', 'Enter valid USD amount.', 'warning');
+      return;
+    }
+    setFundingOpen(false);
+    setFundPinOpen(true);
+  };
+
+  const handleFundPinSuccess = async (pin: string) => {
+    if (!virtualCard) return;
+    const amt = parseFloat(fundAmountUsd);
+    setBusy(true);
+    try {
+      const res = await apiFundVirtualCard(virtualCard.id, { amountUsd: amt, pin });
+      if (res.card) {
+        const mapped = mapApiCard(res.card);
+        setCards(prev => prev.map(c => (c.id === mapped.id ? mapped : c)));
+      } else {
+        void loadCards();
+      }
+      void refreshBalances();
+      setFundPinOpen(false);
+      showToast('Dollar Card Funded', `+$${amt} USD credited to your virtual card.`);
+    } catch (err) {
+      showToast(
+        'Fund failed',
+        err instanceof ApiError ? err.message : 'Could not fund virtual card.',
+        'warning'
+      );
+    } finally {
+      setBusy(false);
     }
   };
 
-  const ownsActive = cardKind === 'physical' ? hasPhysical : hasVirtual;
+  if (loading) {
+    return (
+      <main className="flex-1 min-w-0 px-5 pt-5 pb-28" id="dollar-card-screen">
+        <p className="text-[13px] text-[var(--muted)] text-center py-16">Loading cards…</p>
+      </main>
+    );
+  }
+
+  /** No cards at all → request only */
+  if (!hasAnyCard) {
+    return (
+      <main className="flex-1 min-w-0 px-5 pt-5 pb-28 space-y-4" id="dollar-card-screen">
+        <section className="glass-card glass-strong settings-list !rounded-[24px] px-5 py-12 text-center space-y-5">
+          <span className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-[var(--accent)]/12 text-[var(--accent)]">
+            <Icon name="credit_card" size={28} />
+          </span>
+          <div>
+            <h1 className="text-[17px] font-semibold text-[var(--text)] tracking-tight">
+              No active card
+            </h1>
+            <p className="mt-2 text-[13px] text-[var(--muted)] leading-relaxed max-w-[280px] mx-auto">
+              Request a physical Naira debit card or a virtual USD card to start spending.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => openRequest('physical')}
+            className="glass-cta !rounded-2xl w-full max-w-xs mx-auto inline-flex items-center justify-center gap-2"
+          >
+            <Icon name="add_card" size={16} />
+            Request card
+          </button>
+        </section>
+
+        <RequestCardModal
+          open={requestOpen}
+          onClose={() => setRequestOpen(false)}
+          requestKind={requestKind}
+          setRequestKind={setRequestKind}
+          deliveryAddress={deliveryAddress}
+          setDeliveryAddress={setDeliveryAddress}
+          initialTopUpUsd={initialTopUpUsd}
+          setInitialTopUpUsd={setInitialTopUpUsd}
+          quote={requestQuote}
+          setQuote={setRequestQuote}
+          onContinue={continueRequest}
+          fieldClass={fieldClass}
+        />
+        <PinSheetModal
+          isOpen={requestPinOpen}
+          onClose={() => !busy && setRequestPinOpen(false)}
+          title="Authorize Card Request"
+          subtitle={
+            requestQuote
+              ? `Debit ₦${requestQuote.totalDebitNgn.toLocaleString('en-NG', { maximumFractionDigits: 2 })} · ${
+                  requestKind === 'physical' ? 'Physical Naira' : 'Virtual USD'
+                }`
+              : requestKind === 'physical'
+                ? 'Confirm physical Naira card issuance'
+                : 'Confirm virtual USD card issuance'
+          }
+          onSuccess={pin => void handleRequestSuccess(pin)}
+        />
+      </main>
+    );
+  }
 
   return (
     <main className="flex-1 min-w-0 px-5 pt-5 pb-28 space-y-4" id="dollar-card-screen">
-      {/* Type switch */}
       <div className="glass-card glass-strong settings-list flex p-1 !rounded-[18px]">
         <button
           type="button"
@@ -156,7 +355,11 @@ export const DollarCardScreen: React.FC = () => {
         {ownsActive && (
           <span className="glass-chip !rounded-full !px-2.5 !py-1 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 flex items-center gap-1 shrink-0">
             <Icon name="verified_user" size={13} />
-            {cardKind === 'physical' ? 'Verve · MC' : '3D Secure'}
+            {activeCard?.status === 'pending'
+              ? 'Pending'
+              : cardKind === 'physical'
+                ? (activeCard?.network || 'Verve').toUpperCase()
+                : '3D Secure'}
           </span>
         )}
       </section>
@@ -167,21 +370,25 @@ export const DollarCardScreen: React.FC = () => {
           isLight={isLight}
           onRequest={() => openRequest(cardKind)}
         />
-      ) : cardKind === 'physical' ? (
+      ) : cardKind === 'physical' && physicalCard ? (
         <PhysicalCardFace
-          frozen={physicalFrozen}
+          card={physicalCard}
+          frozen={activeFrozen}
           showDetails={showDetails}
-          balance={ngnBalance}
+          balance={physicalCard.spendAvailableNgn ?? personalBalance}
+          cardholder={physicalCard.cardholderName || cardholderFallback}
         />
-      ) : (
+      ) : virtualCard ? (
         <VirtualCardFace
-          frozen={cardFrozen}
+          card={virtualCard}
+          frozen={activeFrozen}
           showDetails={showDetails}
-          balance={usdBalance}
+          balance={virtualCard.spendAvailableUsd ?? 0}
+          cardholder={virtualCard.cardholderName || cardholderFallback}
         />
-      )}
+      ) : null}
 
-      {ownsActive && (
+      {ownsActive && activeCard && (
         <>
           <div className="grid grid-cols-2 gap-2.5">
             <button
@@ -234,7 +441,7 @@ export const DollarCardScreen: React.FC = () => {
               role="switch"
               aria-checked={activeFrozen}
               aria-label="Freeze card"
-              onClick={() => setFrozen(!activeFrozen)}
+              onClick={() => void setFrozen(!activeFrozen)}
               className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full p-0.5 border-0 appearance-none cursor-pointer transition-colors duration-200 ease-in-out ${
                 activeFrozen
                   ? 'bg-[var(--accent)] justify-end'
@@ -249,17 +456,12 @@ export const DollarCardScreen: React.FC = () => {
 
           {cardKind === 'virtual' ? (
             <section className="glass-card glass-strong settings-list !rounded-[24px] px-5 py-4 space-y-2.5">
-              <div className="flex items-center justify-between">
-                <p className="text-[10px] font-medium uppercase tracking-[0.22em] text-[var(--muted)]">
-                  US billing address
-                </p>
-                <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">
-                  Tax exempt Delaware
-                </span>
-              </div>
-              <div className="text-[12px] text-[var(--text)] space-y-0.5 font-mono">
-                <p>1209 Orange Street, Suite 400</p>
-                <p>Wilmington, DE 19801, United States</p>
+              <p className="text-[10px] font-medium uppercase tracking-[0.22em] text-[var(--muted)]">
+                US billing address
+              </p>
+              <div className="text-[12px] text-[var(--text)] space-y-0.5 font-mono whitespace-pre-line">
+                {virtualCard.billingAddress ||
+                  '1209 Orange Street, Suite 400\nWilmington, DE 19801, United States'}
               </div>
             </section>
           ) : (
@@ -267,21 +469,27 @@ export const DollarCardScreen: React.FC = () => {
               <p className="text-[10px] font-medium uppercase tracking-[0.22em] text-[var(--muted)]">
                 Delivery address
               </p>
-              <p className="text-[12px] text-[var(--text)] leading-snug">{deliveryAddress}</p>
-              <p className="text-[11px] text-[var(--muted)]">Status · Delivered · PIN mailed separately</p>
+              <p className="text-[12px] text-[var(--text)] leading-snug">
+                {physicalCard?.deliveryAddress || deliveryAddress || '—'}
+              </p>
+              <p className="text-[11px] text-[var(--muted)]">
+                Status · {physicalCard?.status === 'pending' ? 'Processing' : 'Active'}
+              </p>
             </section>
           )}
         </>
       )}
 
-      <button
-        type="button"
-        onClick={() => openRequest(cardKind)}
-        className="w-full h-12 rounded-2xl border border-[var(--glass-border)] bg-black/[0.03] dark:bg-white/[0.05] text-[var(--text)] text-[14px] font-semibold flex items-center justify-center gap-2"
-      >
-        <Icon name="add_card" size={16} />
-        Request for card
-      </button>
+      {(!physicalCard || !virtualCard) && (
+        <button
+          type="button"
+          onClick={() => openRequest(!physicalCard ? 'physical' : 'virtual')}
+          className="w-full h-12 rounded-2xl border border-[var(--glass-border)] bg-black/[0.03] dark:bg-white/[0.05] text-[var(--text)] text-[14px] font-semibold flex items-center justify-center gap-2"
+        >
+          <Icon name="add_card" size={16} />
+          Request {!physicalCard ? 'physical' : 'virtual USD'} card
+        </button>
+      )}
 
       {fundingOpen && (
         <div className="app-modal-overlay z-[70] bg-black/70 backdrop-blur-md">
@@ -307,18 +515,6 @@ export const DollarCardScreen: React.FC = () => {
                 value={fundAmountUsd}
                 onChange={e => setFundAmountUsd(e.target.value)}
               />
-              <div className="mt-2.5 text-[11px] text-[var(--muted)] flex justify-between">
-                <span>FX conversion rate</span>
-                <span className="font-mono text-[var(--accent)]">
-                  ₦{fxRate.toLocaleString()} / $1
-                </span>
-              </div>
-              <div className="mt-1 text-[11px] text-[var(--text)] flex justify-between font-semibold">
-                <span>Total naira debit</span>
-                <span className="font-mono text-emerald-600 dark:text-emerald-400">
-                  ₦{((parseFloat(fundAmountUsd) || 0) * fxRate).toLocaleString()}
-                </span>
-              </div>
             </div>
             <div className="grid grid-cols-2 gap-2.5 pt-1">
               <button
@@ -330,90 +526,294 @@ export const DollarCardScreen: React.FC = () => {
               </button>
               <button
                 type="button"
-                onClick={handleFundCard}
+                onClick={handleFundContinue}
                 className="h-11 rounded-2xl bg-[var(--accent)] text-white text-[12px] font-semibold"
               >
-                Confirm load
+                Continue
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {requestOpen && (
-        <div className="app-modal-overlay z-[75] bg-black/70 backdrop-blur-md">
-          <div className="app-modal-panel glass-card glass-strong !rounded-[24px] p-5 space-y-4">
-            <div className="flex items-center justify-between pb-2 border-b border-[var(--glass-border)]">
-              <h3 className="text-[14px] font-semibold text-[var(--text)]">Request for card</h3>
-              <button
-                type="button"
-                onClick={() => setRequestOpen(false)}
-                className="frosted-pad !h-9 !w-9 !min-h-9 !min-w-9 !rounded-full text-[var(--muted)]"
-                aria-label="Close"
-              >
-                <Icon name="close" size={16} />
-              </button>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2">
-              {(
-                [
-                  { id: 'physical' as const, label: 'Physical', hint: 'Naira debit' },
-                  { id: 'virtual' as const, label: 'Virtual USD', hint: 'Online only' },
-                ] as const
-              ).map(opt => (
-                <button
-                  key={opt.id}
-                  type="button"
-                  onClick={() => setRequestKind(opt.id)}
-                  className={`settings-row rounded-2xl px-3 py-3 text-left border appearance-none cursor-pointer ${
-                    requestKind === opt.id
-                      ? 'border-[var(--accent)]/55 ring-1 ring-[var(--accent)]/30 bg-[var(--accent)]/8'
-                      : 'border-[var(--glass-border)] bg-black/[0.03] dark:bg-white/[0.04]'
-                  }`}
-                >
-                  <p className="text-[13px] font-semibold text-[var(--text)]">{opt.label}</p>
-                  <p className="text-[10px] text-[var(--muted)] mt-0.5">{opt.hint}</p>
-                </button>
-              ))}
-            </div>
-
-            {requestKind === 'physical' && (
-              <textarea
-                value={deliveryAddress}
-                onChange={e => setDeliveryAddress(e.target.value)}
-                className={`${fieldClass} !h-24 py-3 resize-none`}
-                placeholder="Delivery address"
-              />
-            )}
-
-            <p className="text-[11px] text-[var(--muted)] leading-snug">
-              {requestKind === 'physical'
-                ? 'Issuance fee ₦2,500 · Ships in 5–7 working days after KYC check.'
-                : 'Issuance fee $1 · Instant virtual Mastercard for FX spend.'}
-            </p>
-
-            <button type="button" onClick={continueRequest} className="glass-cta w-full">
-              Continue to PIN
-            </button>
-          </div>
-        </div>
-      )}
+      <RequestCardModal
+        open={requestOpen}
+        onClose={() => setRequestOpen(false)}
+        requestKind={requestKind}
+        setRequestKind={setRequestKind}
+        deliveryAddress={deliveryAddress}
+        setDeliveryAddress={setDeliveryAddress}
+        initialTopUpUsd={initialTopUpUsd}
+        setInitialTopUpUsd={setInitialTopUpUsd}
+        quote={requestQuote}
+        setQuote={setRequestQuote}
+        onContinue={continueRequest}
+        fieldClass={fieldClass}
+      />
 
       <PinSheetModal
         isOpen={requestPinOpen}
-        onClose={() => setRequestPinOpen(false)}
+        onClose={() => !busy && setRequestPinOpen(false)}
         title="Authorize Card Request"
         subtitle={
-          requestKind === 'physical'
-            ? 'Confirm physical Naira card issuance'
-            : 'Confirm virtual USD card issuance'
+          requestQuote
+            ? `Debit ₦${requestQuote.totalDebitNgn.toLocaleString('en-NG', { maximumFractionDigits: 2 })} · ${
+                requestKind === 'physical' ? 'Physical Naira' : 'Virtual USD'
+              }`
+            : requestKind === 'physical'
+              ? 'Confirm physical Naira card issuance'
+              : 'Confirm virtual USD card issuance'
         }
-        onSuccess={handleRequestSuccess}
+        onSuccess={pin => void handleRequestSuccess(pin)}
+      />
+      <PinSheetModal
+        isOpen={fundPinOpen}
+        onClose={() => !busy && setFundPinOpen(false)}
+        title="Confirm card funding"
+        subtitle={`Load $${fundAmountUsd} USD`}
+        onSuccess={pin => void handleFundPinSuccess(pin)}
       />
     </main>
   );
 };
+
+const formatNgn = (n: number) =>
+  `₦${n.toLocaleString('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+const RequestCardModal: React.FC<{
+  open: boolean;
+  onClose: () => void;
+  requestKind: CardKind;
+  setRequestKind: (k: CardKind) => void;
+  deliveryAddress: string;
+  setDeliveryAddress: (v: string) => void;
+  initialTopUpUsd: string;
+  setInitialTopUpUsd: (v: string) => void;
+  quote: AppCardRequestQuote | null;
+  setQuote: (q: AppCardRequestQuote | null) => void;
+  onContinue: () => void;
+  fieldClass: string;
+}> = ({
+  open,
+  onClose,
+  requestKind,
+  setRequestKind,
+  deliveryAddress,
+  setDeliveryAddress,
+  initialTopUpUsd,
+  setInitialTopUpUsd,
+  quote,
+  setQuote,
+  onContinue,
+  fieldClass,
+}) => {
+  const [quoteLoading, setQuoteLoading] = useState(false);
+  const [quoteError, setQuoteError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    const kind = requestKind === 'physical' ? 'physical' : 'virtual_usd';
+    const usd = parseFloat(initialTopUpUsd);
+    const timer = window.setTimeout(() => {
+      setQuoteLoading(true);
+      setQuoteError(null);
+      void apiCardRequestQuote({
+        kind,
+        initialTopUpUsd:
+          requestKind === 'virtual' && !isNaN(usd) ? usd : undefined,
+      })
+        .then(q => {
+          if (cancelled) return;
+          setQuote(q);
+          if (
+            requestKind === 'virtual' &&
+            q.minInitialTopUpUsd > 0 &&
+            (isNaN(usd) || usd < q.minInitialTopUpUsd)
+          ) {
+            setInitialTopUpUsd(String(q.minInitialTopUpUsd));
+          }
+        })
+        .catch(err => {
+          if (cancelled) return;
+          setQuote(null);
+          setQuoteError(
+            err instanceof ApiError ? err.message : 'Could not load card cost summary.'
+          );
+        })
+        .finally(() => {
+          if (!cancelled) setQuoteLoading(false);
+        });
+    }, requestKind === 'virtual' ? 350 : 0);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [open, requestKind, initialTopUpUsd, setQuote, setInitialTopUpUsd]);
+
+  if (!open) return null;
+
+  const isVirtual = requestKind === 'virtual';
+
+  return (
+    <div className="app-modal-overlay z-[75] bg-black/70 backdrop-blur-md">
+      <div className="app-modal-panel glass-card glass-strong !rounded-[24px] p-5 space-y-4 max-h-[min(90vh,640px)] overflow-y-auto">
+        <div className="flex items-center justify-between pb-2 border-b border-[var(--glass-border)]">
+          <h3 className="text-[14px] font-semibold text-[var(--text)]">Request card</h3>
+          <button
+            type="button"
+            onClick={onClose}
+            className="frosted-pad !h-9 !w-9 !min-h-9 !min-w-9 !rounded-full text-[var(--muted)]"
+            aria-label="Close"
+          >
+            <Icon name="close" size={18} />
+          </button>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2">
+          {(['physical', 'virtual'] as const).map(k => (
+            <button
+              key={k}
+              type="button"
+              onClick={() => setRequestKind(k)}
+              className={`rounded-2xl border px-3 py-3 text-left ${
+                requestKind === k
+                  ? 'border-[var(--accent)]/50 bg-[var(--accent)]/10'
+                  : 'border-[var(--glass-border)]'
+              }`}
+            >
+              <p className="text-[12px] font-semibold text-[var(--text)]">
+                {k === 'physical' ? 'Physical Naira' : 'Virtual USD'}
+              </p>
+              <p className="text-[10px] text-[var(--muted)] mt-0.5">
+                {k === 'physical' ? 'ATM · POS · in-store' : 'Online · international'}
+              </p>
+            </button>
+          ))}
+        </div>
+
+        {requestKind === 'physical' && (
+          <div className="space-y-1.5">
+            <label className="block text-[10px] font-medium uppercase tracking-[0.22em] text-[var(--muted)]">
+              Delivery address
+            </label>
+            <textarea
+              className={`${fieldClass} !h-24 py-3 resize-none`}
+              value={deliveryAddress}
+              onChange={e => setDeliveryAddress(e.target.value)}
+              placeholder="Full delivery address"
+            />
+          </div>
+        )}
+
+        {isVirtual && (
+          <div className="space-y-1.5">
+            <label className="block text-[10px] font-medium uppercase tracking-[0.22em] text-[var(--muted)]">
+              First top-up (USD)
+            </label>
+            <input
+              className={`${fieldClass} !h-12 font-mono text-base`}
+              type="number"
+              min={quote?.minInitialTopUpUsd ?? 0}
+              step="1"
+              value={initialTopUpUsd}
+              onChange={e => setInitialTopUpUsd(e.target.value)}
+              placeholder="20"
+            />
+            {quote && quote.minInitialTopUpUsd > 0 && (
+              <p className="text-[11px] text-[var(--muted)]">
+                Minimum ${quote.minInitialTopUpUsd.toFixed(2)} USD required to activate.
+              </p>
+            )}
+          </div>
+        )}
+
+        <section className="rounded-2xl border border-[var(--glass-border)] bg-black/[0.03] dark:bg-white/[0.04] px-4 py-3.5 space-y-2.5">
+          <p className="text-[10px] font-medium uppercase tracking-[0.22em] text-[var(--muted)]">
+            Cost summary
+          </p>
+          {quoteLoading && !quote ? (
+            <p className="text-[12px] text-[var(--muted)]">Loading quote…</p>
+          ) : quoteError && !quote ? (
+            <p className="text-[12px] text-rose-500">{quoteError}</p>
+          ) : quote ? (
+            <>
+              <SummaryRow label="Card cost" value={formatNgn(quote.issuanceFeeNgn)} />
+              {quote.deliveryFeeNgn > 0 && (
+                <SummaryRow label="Delivery" value={formatNgn(quote.deliveryFeeNgn)} />
+              )}
+              {isVirtual && (
+                <>
+                  <SummaryRow
+                    label="First top-up"
+                    value={`$${quote.initialTopUpUsd.toFixed(2)} USD`}
+                  />
+                  {quote.fxRate > 0 && (
+                    <SummaryRow
+                      label="FX rate"
+                      value={`₦${quote.fxRate.toLocaleString('en-NG', { maximumFractionDigits: 2 })} / $1`}
+                    />
+                  )}
+                  <SummaryRow
+                    label="Conversion (NGN)"
+                    value={formatNgn(quote.topUpNgn)}
+                  />
+                </>
+              )}
+              <div className="pt-2 mt-1 border-t border-[var(--glass-border)] flex items-center justify-between gap-3">
+                <span className="text-[12px] font-semibold text-[var(--text)]">Total debit</span>
+                <span className="font-mono text-[14px] font-bold text-[var(--text)]">
+                  {formatNgn(quote.totalDebitNgn)}
+                </span>
+              </div>
+              {quote.walletBalanceNgn != null && (
+                <p
+                  className={`text-[11px] ${
+                    quote.sufficientBalance === false ? 'text-rose-500' : 'text-[var(--muted)]'
+                  }`}
+                >
+                  Wallet · {formatNgn(quote.walletBalanceNgn)}
+                  {quote.sufficientBalance === false ? ' · insufficient' : ''}
+                </p>
+              )}
+              {quote.notes.length > 0 && (
+                <ul className="pt-1 space-y-1">
+                  {quote.notes.map(n => (
+                    <li key={n} className="text-[11px] text-[var(--muted)] leading-snug">
+                      {n}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {quoteLoading && (
+                <p className="text-[10px] text-[var(--muted)]">Updating quote…</p>
+              )}
+            </>
+          ) : (
+            <p className="text-[12px] text-[var(--muted)]">Select a card type to see costs.</p>
+          )}
+        </section>
+
+        <button
+          type="button"
+          onClick={onContinue}
+          disabled={quoteLoading && !quote}
+          className="glass-cta w-full disabled:opacity-50"
+        >
+          Continue with PIN
+        </button>
+      </div>
+    </div>
+  );
+};
+
+const SummaryRow: React.FC<{ label: string; value: string }> = ({ label, value }) => (
+  <div className="flex items-start justify-between gap-3 text-[12px]">
+    <span className="text-[var(--muted)]">{label}</span>
+    <span className="font-mono text-[var(--text)] text-right shrink-0">{value}</span>
+  </div>
+);
 
 const EmptyCardState: React.FC<{
   kind: CardKind;
@@ -444,16 +844,18 @@ const EmptyCardState: React.FC<{
       className="glass-cta !rounded-2xl inline-flex items-center justify-center gap-2 mx-auto px-6"
     >
       <Icon name="add_card" size={16} />
-      Request for card
+      Request card
     </button>
   </section>
 );
 
 const PhysicalCardFace: React.FC<{
+  card: AppCard;
   frozen: boolean;
   showDetails: boolean;
   balance: number;
-}> = ({ frozen, showDetails, balance }) => (
+  cardholder: string;
+}> = ({ card, frozen, showDetails, balance, cardholder }) => (
   <div
     className={`rounded-[24px] p-5 border relative overflow-hidden shadow-2xl transition-all duration-300 ${
       frozen
@@ -484,23 +886,31 @@ const PhysicalCardFace: React.FC<{
     </div>
     <div className="py-2 relative">
       <div className="font-mono text-base sm:text-lg tracking-widest text-white whitespace-nowrap">
-        {showDetails ? '5061 2345 6789 1044' : '•••• •••• •••• 1044'}
+        {showDetails ? card.panMasked : `•••• •••• •••• ${card.last4}`}
       </div>
     </div>
-    <div className="flex justify-between items-end pt-2 border-t border-white/10 mt-2 relative">
-      <div>
+    <div className="flex justify-between items-end pt-2 border-t border-white/10 mt-2 relative gap-2">
+      <div className="min-w-0">
         <span className="text-[9px] text-white/45 uppercase block">Cardholder</span>
-        <span className="text-xs font-semibold text-white tracking-wide">INNOCENT SOLOMON</span>
+        <span className="text-xs font-semibold text-white tracking-wide truncate block uppercase">
+          {cardholder}
+        </span>
       </div>
       <div>
         <span className="text-[9px] text-white/45 uppercase block">Expires</span>
-        <span className="font-mono text-xs text-white">{showDetails ? '11/28' : '••/••'}</span>
+        <span className="font-mono text-xs text-white">
+          {showDetails ? `${card.expiryMonth}/${card.expiryYear}` : '••/••'}
+        </span>
       </div>
       <div>
         <span className="text-[9px] text-white/45 uppercase block">CVV</span>
-        <span className="font-mono text-xs text-white">{showDetails ? '318' : '•••'}</span>
+        <span className="font-mono text-xs text-white">
+          {showDetails ? card.cvvMasked || '•••' : '•••'}
+        </span>
       </div>
-      <div className="text-[10px] font-bold text-white/80 tracking-wide">VERVE</div>
+      <div className="text-[10px] font-bold text-white/80 tracking-wide uppercase">
+        {card.network || 'VERVE'}
+      </div>
     </div>
     {frozen && (
       <div className="absolute inset-0 flex items-center justify-center bg-black/40 backdrop-blur-[2px] rounded-[24px]">
@@ -514,10 +924,12 @@ const PhysicalCardFace: React.FC<{
 );
 
 const VirtualCardFace: React.FC<{
+  card: AppCard;
   frozen: boolean;
   showDetails: boolean;
   balance: number;
-}> = ({ frozen, showDetails, balance }) => (
+  cardholder: string;
+}> = ({ card, frozen, showDetails, balance, cardholder }) => (
   <div
     id="virtual-dollar-card"
     className={`rounded-[24px] p-5 border relative overflow-hidden transition-all duration-300 shadow-2xl ${
@@ -547,21 +959,27 @@ const VirtualCardFace: React.FC<{
     </div>
     <div className="py-2 relative">
       <div className="font-mono text-base sm:text-lg tracking-widest text-white whitespace-nowrap">
-        {showDetails ? '5399 4102 9840 4092' : '•••• •••• •••• 4092'}
+        {showDetails ? card.panMasked : `•••• •••• •••• ${card.last4}`}
       </div>
     </div>
-    <div className="flex justify-between items-end pt-2 border-t border-white/10 mt-2 relative">
-      <div>
+    <div className="flex justify-between items-end pt-2 border-t border-white/10 mt-2 relative gap-2">
+      <div className="min-w-0">
         <span className="text-[9px] text-white/45 uppercase block">Cardholder</span>
-        <span className="text-xs font-semibold text-white tracking-wide">INNOCENT SOLOMON</span>
+        <span className="text-xs font-semibold text-white tracking-wide truncate block uppercase">
+          {cardholder}
+        </span>
       </div>
       <div>
         <span className="text-[9px] text-white/45 uppercase block">Expires</span>
-        <span className="font-mono text-xs text-white">{showDetails ? '08/29' : '••/••'}</span>
+        <span className="font-mono text-xs text-white">
+          {showDetails ? `${card.expiryMonth}/${card.expiryYear}` : '••/••'}
+        </span>
       </div>
       <div>
         <span className="text-[9px] text-white/45 uppercase block">CVV</span>
-        <span className="font-mono text-xs text-white">{showDetails ? '742' : '•••'}</span>
+        <span className="font-mono text-xs text-white">
+          {showDetails ? card.cvvMasked || '•••' : '•••'}
+        </span>
       </div>
       <div className="flex -space-x-2">
         <div className="w-6 h-6 rounded-full bg-[#eb001b]" />

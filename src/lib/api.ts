@@ -70,10 +70,32 @@ export async function apiRequest<T>(
   }
 
   if (!res.ok) {
+    const body = json as Record<string, unknown> | null;
+    const errors = body?.errors as Record<string, string[] | string> | undefined;
+    const firstFieldError =
+      errors &&
+      Object.values(errors)
+        .flatMap(v => (Array.isArray(v) ? v : [v]))
+        .find(Boolean);
     const msg =
-      (json && typeof json === 'object' && 'message' in json && json.message) ||
+      (typeof body?.message === 'string' && body.message) ||
+      (typeof firstFieldError === 'string' && firstFieldError) ||
       `Request failed (${res.status})`;
     throw new ApiError(String(msg), res.status, json);
+  }
+
+  // Some APIs return HTTP 200 with { success: false, message }
+  if (
+    json &&
+    typeof json === 'object' &&
+    'success' in json &&
+    (json as ApiEnvelope<T>).success === false
+  ) {
+    const msg =
+      (typeof (json as ApiEnvelope<T>).message === 'string' &&
+        (json as ApiEnvelope<T>).message) ||
+      'Request failed';
+    throw new ApiError(String(msg), res.status || 422, json);
   }
 
   if (json && 'data' in json && json.data !== undefined) {

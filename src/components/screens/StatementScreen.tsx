@@ -1,21 +1,26 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useTransactions } from '../../context/TransactionContext';
+import { ApiError } from '../../lib/api';
+import { apiCreateStatement, type StatementKind } from '../../lib/xtrapayApi';
 import { Icon } from '../Icon';
-import { INITIAL_TERMINALS } from '../../data/terminals';
 
-type StatementKind = 'wallet' | 'savings' | 'card' | 'pos' | 'business';
 type Period = '7' | '30' | '90' | '365';
 
 /**
- * Statement centre — download wallet, savings, card, and POS statements.
+ * Statement centre — download wallet, savings, card, POS, business statements via API.
  */
 export const StatementScreen: React.FC = () => {
-  const { showToast, accountContext } = useTransactions();
-  const hasPos = INITIAL_TERMINALS.length > 0;
+  const { showToast, accountContext, wallets } = useTransactions();
+  const posWallets = useMemo(
+    () => wallets.filter(w => (w.kind || '').toLowerCase().includes('pos') || w.name.toLowerCase().includes('pos')),
+    [wallets]
+  );
+  const hasPos = true; // always offer POS; backend validates scope
 
   const [kind, setKind] = useState<StatementKind>('wallet');
   const [period, setPeriod] = useState<Period>('30');
   const [posId, setPosId] = useState<string>('all');
+  const [busy, setBusy] = useState(false);
 
   const kinds = useMemo(() => {
     const list: { id: StatementKind; label: string; hint: string; icon: string }[] = [
@@ -64,19 +69,42 @@ export const StatementScreen: React.FC = () => {
           ? 'Last 90 days'
           : 'Last 12 months';
 
-  const handleDownload = (format: 'PDF' | 'CSV') => {
-    const scope =
-      kind === 'pos'
-        ? posId === 'all'
-          ? 'all POS terminals'
-          : INITIAL_TERMINALS.find(t => t.id === posId)?.name ?? 'POS'
-        : kinds.find(k => k.id === kind)?.label ?? 'Wallet';
-
-    showToast(
-      `${format} Statement Ready`,
-      `${scope} · ${periodLabel} · ${accountContext === 'personal' ? 'Personal' : 'Business'} account sealed for download.`,
-      'success'
-    );
+  const handleDownload = async (format: 'PDF' | 'CSV') => {
+    setBusy(true);
+    try {
+      const res = await apiCreateStatement({
+        kind,
+        period,
+        format: format.toLowerCase() as 'pdf' | 'csv',
+        posId: kind === 'pos' ? posId : undefined,
+        context: accountContext,
+      });
+      const url = res.downloadUrl ?? res.download_url ?? res.url;
+      if (url) {
+        window.open(url, '_blank', 'noopener,noreferrer');
+        showToast(
+          `${format} ready`,
+          `${kinds.find(k => k.id === kind)?.label ?? 'Statement'} · ${periodLabel}`,
+          'success'
+        );
+      } else {
+        showToast(
+          `${format} queued`,
+          res.fileName
+            ? `${res.fileName} is being prepared.`
+            : `${periodLabel} statement is being prepared.`,
+          'success'
+        );
+      }
+    } catch (err) {
+      showToast(
+        'Download failed',
+        err instanceof ApiError ? err.message : 'Could not generate statement.',
+        'warning'
+      );
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -110,7 +138,7 @@ export const StatementScreen: React.FC = () => {
         </div>
       </section>
 
-      {kind === 'pos' && hasPos && (
+      {kind === 'pos' && (
         <section className="space-y-2">
           <p className="px-1 text-[10px] font-medium uppercase tracking-[0.28em] text-[var(--muted)]">
             POS scope
@@ -135,25 +163,25 @@ export const StatementScreen: React.FC = () => {
                 <p className="text-[11px] text-[var(--muted)]">Combined float & txn report</p>
               </div>
             </button>
-            {INITIAL_TERMINALS.map(t => (
+            {posWallets.map(w => (
               <button
-                key={t.id}
+                key={w.id}
                 type="button"
-                onClick={() => setPosId(t.id)}
+                onClick={() => setPosId(w.id)}
                 className="settings-row w-full flex items-center gap-3 px-3.5 py-3 text-left bg-transparent border-0 appearance-none cursor-pointer"
               >
                 <span
                   className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 ${
-                    posId === t.id
+                    posId === w.id
                       ? 'border-[var(--accent)] bg-[var(--accent)] text-white'
                       : 'border-[var(--glass-border)]'
                   }`}
                 >
-                  {posId === t.id && <Icon name="check" size={12} />}
+                  {posId === w.id && <Icon name="check" size={12} />}
                 </span>
                 <div className="min-w-0 flex-1">
-                  <p className="text-[13px] font-semibold text-[var(--text)] truncate">{t.name}</p>
-                  <p className="text-[11px] font-mono text-[var(--muted)]">{t.terminalId}</p>
+                  <p className="text-[13px] font-semibold text-[var(--text)] truncate">{w.name}</p>
+                  <p className="text-[11px] font-mono text-[var(--muted)]">{w.accountNumber}</p>
                 </div>
               </button>
             ))}
@@ -193,16 +221,18 @@ export const StatementScreen: React.FC = () => {
       <section className="grid grid-cols-2 gap-2.5">
         <button
           type="button"
-          onClick={() => handleDownload('PDF')}
-          className="glass-cta w-full !rounded-2xl flex items-center justify-center gap-2"
+          disabled={busy}
+          onClick={() => void handleDownload('PDF')}
+          className="glass-cta w-full !rounded-2xl flex items-center justify-center gap-2 disabled:opacity-50"
         >
           <Icon name="download" size={16} />
           PDF
         </button>
         <button
           type="button"
-          onClick={() => handleDownload('CSV')}
-          className="settings-row w-full h-12 rounded-2xl border border-[var(--glass-border)] bg-black/[0.03] dark:bg-white/[0.05] text-[var(--text)] text-[14px] font-semibold flex items-center justify-center gap-2 appearance-none cursor-pointer"
+          disabled={busy}
+          onClick={() => void handleDownload('CSV')}
+          className="settings-row w-full h-12 rounded-2xl border border-[var(--glass-border)] bg-black/[0.03] dark:bg-white/[0.05] text-[var(--text)] text-[14px] font-semibold flex items-center justify-center gap-2 appearance-none cursor-pointer disabled:opacity-50"
         >
           <Icon name="file_text" size={16} />
           CSV

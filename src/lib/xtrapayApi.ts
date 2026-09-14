@@ -1,4 +1,4 @@
-import { apiRequest, setAccessToken } from './api';
+import { ApiError, apiRequest, setAccessToken } from './api';
 import type { WalletAccount } from '../data/wallets';
 import type { Transaction } from '../types';
 
@@ -315,6 +315,147 @@ export async function apiWallets() {
   return apiRequest<ApiBootstrap['wallets']>('/wallets');
 }
 
+export type ApiWallet = ApiBootstrap['wallets'][number] & {
+  purpose?: string | null;
+  parentWalletId?: string | null;
+  parent_wallet_id?: string | null;
+  status?: string | null;
+  createdAt?: string | null;
+  created_at?: string | null;
+};
+
+export type CreateSubAccountPayload = {
+  kind: 'sub_personal' | 'sub_business';
+  name: string;
+  purpose: string;
+  pin: string;
+  parentContext?: 'personal' | 'business';
+};
+
+/**
+ * POST /wallets — create sub-account (KYC inherited from parent; no re-registration).
+ * Also accepted: POST /wallets/sub-accounts with the same body.
+ */
+export async function apiCreateSubAccount(payload: CreateSubAccountPayload) {
+  const raw = await apiRequest<ApiWallet>('/wallets', {
+    method: 'POST',
+    body: JSON.stringify({
+      kind: payload.kind,
+      name: payload.name,
+      purpose: payload.purpose,
+      pin: payload.pin,
+      parentContext: payload.parentContext,
+    }),
+  });
+  return mapApiWallet(raw);
+}
+
+/** Tier-2 instant business open — personal KYC reused server-side. */
+export type CreateBusinessAccountPayload = {
+  businessName: string;
+  /** Mandatory CAC — BN (business name) or RC (registered company). */
+  cac: string;
+  address: string;
+  pin: string;
+};
+
+/**
+ * POST /business/accounts — Tier-2 instant path.
+ * Body: business_name, cac (BN|RC), address, pin.
+ * Server copies name/DOB/BVN/NIN/email/phone from personal KYC and queues a fresh
+ * CheckoutRail (Mevon) pay-in VA. Docs / address verification deferred.
+ */
+export async function apiCreateBusinessAccount(payload: CreateBusinessAccountPayload) {
+  const body = {
+    business_name: payload.businessName,
+    cac: payload.cac,
+    address: payload.address,
+    pin: payload.pin,
+    // camelCase aliases for stacks that prefer them
+    businessName: payload.businessName,
+  };
+  try {
+    const raw = await apiRequest<ApiWallet>('/business/accounts', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+    return mapApiWallet(raw);
+  } catch (err) {
+    if (err instanceof ApiError && (err.status === 404 || err.status === 405)) {
+      const raw = await apiRequest<ApiWallet>('/wallets', {
+        method: 'POST',
+        body: JSON.stringify({
+          kind: 'business',
+          name: payload.businessName,
+          business_name: payload.businessName,
+          cac: payload.cac,
+          address: payload.address,
+          pin: payload.pin,
+        }),
+      });
+      return mapApiWallet(raw);
+    }
+    throw err;
+  }
+}
+
+export async function apiBusinessAccounts() {
+  try {
+    const data = await apiRequest<ApiWallet[] | { accounts: ApiWallet[]; wallets?: ApiWallet[] }>(
+      '/business/accounts'
+    );
+    const list = Array.isArray(data) ? data : data?.accounts ?? data?.wallets ?? [];
+    return list.map(mapApiWallet);
+  } catch {
+    const all = await apiWallets();
+    return all
+      .filter(w => w.kind === 'business' || w.kind === 'sub_business')
+      .map(w => mapApiWallet(w as ApiWallet));
+  }
+}
+
+export function mapApiWallet(w: ApiWallet): WalletAccount {
+  const kind = (w.kind || 'personal') as WalletAccount['kind'];
+  const purpose = w.purpose ? String(w.purpose) : undefined;
+  const defaultSubtitle =
+    kind === 'sub_business'
+      ? 'Sub-account · Mini business'
+      : kind === 'sub_personal'
+        ? 'Sub-account · Personal'
+        : kind === 'business'
+          ? 'Main business'
+          : 'Main wallet';
+  return {
+    id: String(w.id),
+    name: String(w.name),
+    kind,
+    accountNumber: String(w.accountNumber),
+    bankName: String(w.bankName),
+    balance: Number(w.balance ?? 0),
+    subtitle: purpose || String(w.subtitle || defaultSubtitle),
+    accountName: w.accountName,
+    ussd: w.ussd,
+  };
+}
+
+/** Optional dedicated list: GET /wallets/sub-accounts */
+export async function apiSubAccounts() {
+  try {
+    const data = await apiRequest<ApiWallet[] | { wallets: ApiWallet[]; subAccounts?: ApiWallet[] }>(
+      '/wallets/sub-accounts'
+    );
+    const list = Array.isArray(data)
+      ? data
+      : data?.subAccounts ?? data?.wallets ?? [];
+    return list.map(mapApiWallet);
+  } catch {
+    const all = await apiWallets();
+    return all
+      .filter(w => w.kind === 'sub_personal' || w.kind === 'sub_business')
+      .map(mapApiWallet);
+  }
+}
+
 export type ApiBank = {
   id: string;
   name: string;
@@ -386,6 +527,22 @@ export async function apiSetPin(payload: { pin: string; confirmPin: string }) {
   );
 }
 
+/** Verify the user's set transaction PIN. Throws on wrong/missing PIN (422). */
+export async function apiVerifyPin(pin: string): Promise<void> {
+  if (!/^\d{4}$/.test(pin)) {
+    throw new ApiError('Enter a 4-digit PIN.', 422);
+  }
+  // Backend: Hash::check against pin_hash — 422 when unset or invalid.
+  // Do not treat empty bodies as success beyond HTTP/success flags in apiRequest.
+  await apiRequest<{ ok?: boolean; valid?: boolean; pinSet?: boolean } | null>(
+    '/security/pin/verify',
+    {
+      method: 'POST',
+      body: JSON.stringify({ pin }),
+    }
+  );
+}
+
 export async function apiRequestPinChange(currentPin: string) {
   return apiRequest<{
     otpSent: boolean;
@@ -432,6 +589,593 @@ export async function apiTransactions(params?: { category?: string; limit?: numb
   if (params?.limit) q.set('limit', String(params.limit));
   const suffix = q.toString() ? `?${q}` : '';
   return apiRequest<Transaction[]>(`/transactions${suffix}`);
+}
+
+/* ── Personal savings vaults ── */
+
+export type ApiSavingsPlan = {
+  id: string;
+  name?: string | null;
+  title?: string | null;
+  type?: string | null;
+  kind?: string | null;
+  balance?: number | null;
+  amount?: number | null;
+  targetAmount?: number | null;
+  target_amount?: number | null;
+  percentage?: number | null;
+  savePercent?: number | null;
+  save_percent?: number | null;
+  apy?: number | null;
+  maturityDate?: string | null;
+  maturity_date?: string | null;
+  status?: string | null;
+  createdAt?: string | null;
+  created_at?: string | null;
+  interestEarned?: number | null;
+  interest_earned?: number | null;
+};
+
+export type ApiSavingsSummary = {
+  flexibleBalance?: number;
+  flexible_balance?: number;
+  strictBalance?: number;
+  strict_balance?: number;
+  strictAutoSave?: boolean;
+  strict_auto_save?: boolean;
+  totalBalance?: number;
+  total_balance?: number;
+  blendedApy?: number;
+  blended_apy?: number;
+  interestToday?: number;
+  interest_today?: number;
+  lifetimeInterest?: number;
+  lifetime_interest?: number;
+  plans?: ApiSavingsPlan[];
+};
+
+function mapPlanType(raw?: string | null): import('../types').SavingsPlanType {
+  const v = (raw || '').toLowerCase().replace(/-/g, '_');
+  if (v === 'fixed' || v === 'strict' || v === 'locked') return 'fixed';
+  if (v === 'spend_and_save' || v === 'spend_save' || v === 'autosave' || v === 'spend') {
+    return 'spend_and_save';
+  }
+  return 'flexible';
+}
+
+export function mapApiSavingsPlan(raw: ApiSavingsPlan): import('../types').SavingsPlan {
+  const type = mapPlanType(raw.type ?? raw.kind);
+  const statusRaw = (raw.status || 'Active').toLowerCase();
+  const status =
+    statusRaw === 'matured' || statusRaw === 'completed'
+      ? ('Matured' as const)
+      : statusRaw === 'paused'
+        ? ('Paused' as const)
+        : ('Active' as const);
+  return {
+    id: String(raw.id),
+    name: String(raw.name ?? raw.title ?? 'Savings plan'),
+    type,
+    balance: Number(raw.balance ?? raw.amount ?? 0),
+    targetAmount:
+      raw.targetAmount != null || raw.target_amount != null
+        ? Number(raw.targetAmount ?? raw.target_amount)
+        : undefined,
+    percentage:
+      raw.percentage != null || raw.savePercent != null || raw.save_percent != null
+        ? Number(raw.percentage ?? raw.savePercent ?? raw.save_percent)
+        : type === 'spend_and_save'
+          ? 10
+          : undefined,
+    apy: raw.apy != null ? Number(raw.apy) : undefined,
+    maturityDate: raw.maturityDate ?? raw.maturity_date ?? undefined,
+    status,
+    createdAt: raw.createdAt ?? raw.created_at ?? undefined,
+    interestEarned:
+      raw.interestEarned != null || raw.interest_earned != null
+        ? Number(raw.interestEarned ?? raw.interest_earned)
+        : undefined,
+  };
+}
+
+export function mapApiSavingsSummary(
+  raw: ApiSavingsSummary
+): import('../types').SavingsSummary {
+  const plans = (raw.plans || []).map(mapApiSavingsPlan);
+  const flexibleBalance = Number(raw.flexibleBalance ?? raw.flexible_balance ?? 0);
+  const strictBalance = Number(raw.strictBalance ?? raw.strict_balance ?? 0);
+  return {
+    flexibleBalance,
+    strictBalance,
+    strictAutoSave: Boolean(raw.strictAutoSave ?? raw.strict_auto_save),
+    totalBalance: Number(
+      raw.totalBalance ?? raw.total_balance ?? flexibleBalance + strictBalance
+    ),
+    blendedApy:
+      raw.blendedApy != null || raw.blended_apy != null
+        ? Number(raw.blendedApy ?? raw.blended_apy)
+        : undefined,
+    interestToday:
+      raw.interestToday != null || raw.interest_today != null
+        ? Number(raw.interestToday ?? raw.interest_today)
+        : undefined,
+    lifetimeInterest:
+      raw.lifetimeInterest != null || raw.lifetime_interest != null
+        ? Number(raw.lifetimeInterest ?? raw.lifetime_interest)
+        : undefined,
+    plans,
+  };
+}
+
+export async function apiSavings() {
+  const data = await apiRequest<ApiSavingsSummary>('/savings');
+  return mapApiSavingsSummary(data);
+}
+
+export async function apiCreateSavingsPlan(payload: {
+  name: string;
+  type: 'flexible' | 'fixed' | 'spend_and_save';
+  /** Initial deposit (flexible / fixed) */
+  initialAmount?: number;
+  /** Fixed target */
+  targetAmount?: number;
+  /** Fixed maturity ISO date or relative e.g. "90 days" */
+  maturityDate?: string;
+  /** Spend & save percent 1–100 */
+  percentage?: number;
+  walletId?: string;
+}) {
+  const raw = await apiRequest<ApiSavingsPlan>('/savings/plans', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  return mapApiSavingsPlan(raw);
+}
+
+export async function apiSavingsDeposit(
+  planId: string,
+  payload: { amount: number; pin?: string }
+) {
+  const raw = await apiRequest<ApiSavingsPlan | ApiSavingsSummary>(
+    `/savings/plans/${planId}/deposit`,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }
+  );
+  return raw;
+}
+
+export async function apiSavingsWithdraw(
+  planId: string,
+  payload: { amount: number; pin?: string }
+) {
+  const raw = await apiRequest<ApiSavingsPlan | ApiSavingsSummary>(
+    `/savings/plans/${planId}/withdraw`,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }
+  );
+  return raw;
+}
+
+/** Legacy flexible helpers — still supported */
+export async function apiFlexibleDeposit(payload: { amount: number; pin?: string }) {
+  return apiRequest<ApiSavingsSummary>('/savings/flexible/deposit', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function apiFlexibleWithdraw(payload: { amount: number; pin?: string }) {
+  return apiRequest<ApiSavingsSummary>('/savings/flexible/withdraw', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function apiStrictAutosave(enabled: boolean, percentage?: number) {
+  return apiRequest<ApiSavingsSummary>('/savings/strict/autosave', {
+    method: 'PATCH',
+    body: JSON.stringify({ enabled, percentage }),
+  });
+}
+
+/* ── VTU / bills (airtime, data, electricity, TV, betting) ── */
+
+export type VtuNetwork = { id: string; label: string };
+export type VtuPlan = {
+  variation_id: string;
+  label: string;
+  price: number;
+  available?: boolean;
+};
+export type VtuCatalogItem = { id: string; label: string };
+
+export type VtuNetworksResponse = {
+  networks: VtuNetwork[];
+  airtime_min?: number;
+  airtime_max?: number;
+  configured?: boolean;
+  provider?: string;
+};
+
+export type VtuBillCatalog = {
+  electricity_discos?: VtuCatalogItem[];
+  cable_tv_services?: VtuCatalogItem[];
+  betting_services?: VtuCatalogItem[];
+  electricity_min?: number;
+};
+
+export type VtuPayResult = {
+  balance_after?: number;
+  walletBalance?: number;
+  token?: string | null;
+  pendingToken?: string | null;
+  reference?: string | null;
+  message?: string | null;
+  customer_name?: string | null;
+  customerName?: string | null;
+  data?: Record<string, unknown> | null;
+};
+
+export async function apiVtuNetworks() {
+  return apiRequest<VtuNetworksResponse>('/vtu/networks');
+}
+
+export async function apiVtuDataPlans(networkId: string) {
+  const q = new URLSearchParams({ network_id: networkId });
+  return apiRequest<{ plans: VtuPlan[] }>(`/vtu/data-plans?${q}`);
+}
+
+export async function apiVtuBillCatalog() {
+  return apiRequest<VtuBillCatalog>('/vtu/bill-catalog');
+}
+
+export async function apiVtuTvPlans(serviceId: string) {
+  const q = new URLSearchParams({ service_id: serviceId });
+  return apiRequest<{ plans: VtuPlan[] }>(`/vtu/tv-plans?${q}`);
+}
+
+export async function apiVtuAirtime(payload: {
+  network_id: string;
+  phone: string;
+  amount: number;
+  pin: string;
+}) {
+  return apiRequest<VtuPayResult>('/vtu/airtime', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function apiVtuData(payload: {
+  network_id: string;
+  phone: string;
+  variation_id: string;
+  expected_price: number;
+  pin: string;
+}) {
+  return apiRequest<VtuPayResult>('/vtu/data', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function apiVtuElectricityVerify(payload: {
+  service_id: string;
+  customer_id: string;
+  variation_id: 'prepaid' | 'postpaid';
+}) {
+  return apiRequest<VtuPayResult & { customer_name?: string; customerName?: string }>(
+    '/vtu/electricity/verify',
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }
+  );
+}
+
+export async function apiVtuElectricity(payload: {
+  service_id: string;
+  customer_id: string;
+  variation_id: 'prepaid' | 'postpaid';
+  amount: number;
+  pin: string;
+}) {
+  return apiRequest<VtuPayResult>('/vtu/electricity', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function apiVtuBettingVerify(payload: {
+  service_id: string;
+  customer_id: string;
+}) {
+  return apiRequest<VtuPayResult>('/vtu/betting/verify', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function apiVtuBetting(payload: {
+  service_id: string;
+  customer_id: string;
+  amount: number;
+  pin: string;
+}) {
+  return apiRequest<VtuPayResult>('/vtu/betting', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function apiVtuTvVerify(payload: {
+  service_id: string;
+  customer_id: string;
+}) {
+  return apiRequest<VtuPayResult>('/vtu/tv/verify', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function apiVtuTv(payload: {
+  service_id: string;
+  customer_id: string;
+  variation_id: string;
+  expected_price: number;
+  pin: string;
+}) {
+  return apiRequest<VtuPayResult>('/vtu/tv', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+/* ── Cards (physical Naira + virtual USD) ── */
+
+export type ApiCard = {
+  id: string;
+  kind?: string | null;
+  type?: string | null;
+  last4?: string | null;
+  panMasked?: string | null;
+  pan_masked?: string | null;
+  status?: string | null;
+  cardholderName?: string | null;
+  cardholder_name?: string | null;
+  expiryMonth?: number | string | null;
+  expiry_month?: number | string | null;
+  expiryYear?: number | string | null;
+  expiry_year?: number | string | null;
+  network?: string | null;
+  spendAvailableNgn?: number | null;
+  spend_available_ngn?: number | null;
+  spendAvailableUsd?: number | null;
+  spend_available_usd?: number | null;
+  deliveryAddress?: string | null;
+  delivery_address?: string | null;
+  billingAddress?: string | null;
+  billing_address?: string | null;
+  cvvMasked?: string | null;
+  cvv_masked?: string | null;
+};
+
+export type AppCard = {
+  id: string;
+  kind: 'physical' | 'virtual_usd';
+  last4: string;
+  panMasked: string;
+  status: 'active' | 'frozen' | 'pending' | 'inactive';
+  cardholderName: string;
+  expiryMonth: string;
+  expiryYear: string;
+  network: string;
+  spendAvailableNgn?: number;
+  spendAvailableUsd?: number;
+  deliveryAddress?: string;
+  billingAddress?: string;
+  cvvMasked?: string;
+};
+
+function mapCardKind(raw?: string | null): AppCard['kind'] {
+  const v = (raw || '').toLowerCase();
+  if (v.includes('virtual') || v.includes('usd') || v === 'virtual_usd') return 'virtual_usd';
+  return 'physical';
+}
+
+function mapCardStatus(raw?: string | null): AppCard['status'] {
+  const v = (raw || '').toLowerCase();
+  if (v === 'frozen' || v === 'blocked') return 'frozen';
+  if (v === 'pending' || v === 'processing' || v === 'requested') return 'pending';
+  if (v === 'inactive' || v === 'cancelled' || v === 'canceled') return 'inactive';
+  return 'active';
+}
+
+export function mapApiCard(raw: ApiCard): AppCard {
+  const last4 = String(raw.last4 || '').replace(/\D/g, '').slice(-4) || '••••';
+  const pan =
+    String(raw.panMasked ?? raw.pan_masked ?? '').trim() ||
+    (last4 !== '••••' ? `•••• •••• •••• ${last4}` : '•••• •••• •••• ••••');
+  const month = String(raw.expiryMonth ?? raw.expiry_month ?? '').padStart(2, '0').slice(-2);
+  const year = String(raw.expiryYear ?? raw.expiry_year ?? '').slice(-2);
+  return {
+    id: String(raw.id),
+    kind: mapCardKind(raw.kind ?? raw.type),
+    last4,
+    panMasked: pan,
+    status: mapCardStatus(raw.status),
+    cardholderName: String(raw.cardholderName ?? raw.cardholder_name ?? ''),
+    expiryMonth: month || '••',
+    expiryYear: year || '••',
+    network: String(raw.network || 'verve'),
+    spendAvailableNgn:
+      raw.spendAvailableNgn != null || raw.spend_available_ngn != null
+        ? Number(raw.spendAvailableNgn ?? raw.spend_available_ngn)
+        : undefined,
+    spendAvailableUsd:
+      raw.spendAvailableUsd != null || raw.spend_available_usd != null
+        ? Number(raw.spendAvailableUsd ?? raw.spend_available_usd)
+        : undefined,
+    deliveryAddress: raw.deliveryAddress ?? raw.delivery_address ?? undefined,
+    billingAddress: raw.billingAddress ?? raw.billing_address ?? undefined,
+    cvvMasked: raw.cvvMasked ?? raw.cvv_masked ?? undefined,
+  };
+}
+
+export async function apiCards() {
+  const data = await apiRequest<ApiCard[] | { cards: ApiCard[] }>('/cards');
+  const list = Array.isArray(data) ? data : data?.cards ?? [];
+  return list.map(mapApiCard);
+}
+
+/** Quote shown before PIN when requesting a card (fees + USD top-up FX). */
+export type ApiCardRequestQuote = {
+  kind?: string;
+  type?: string;
+  issuanceFeeNgn?: number | null;
+  issuance_fee_ngn?: number | null;
+  deliveryFeeNgn?: number | null;
+  delivery_fee_ngn?: number | null;
+  minInitialTopUpUsd?: number | null;
+  min_initial_top_up_usd?: number | null;
+  initialTopUpUsd?: number | null;
+  initial_top_up_usd?: number | null;
+  fxRate?: number | null;
+  fx_rate?: number | null;
+  topUpNgn?: number | null;
+  top_up_ngn?: number | null;
+  totalDebitNgn?: number | null;
+  total_debit_ngn?: number | null;
+  walletBalanceNgn?: number | null;
+  wallet_balance_ngn?: number | null;
+  sufficientBalance?: boolean | null;
+  sufficient_balance?: boolean | null;
+  currency?: string | null;
+  title?: string | null;
+  notes?: string[] | null;
+};
+
+export type AppCardRequestQuote = {
+  kind: 'physical' | 'virtual_usd';
+  issuanceFeeNgn: number;
+  deliveryFeeNgn: number;
+  minInitialTopUpUsd: number;
+  initialTopUpUsd: number;
+  fxRate: number;
+  topUpNgn: number;
+  totalDebitNgn: number;
+  walletBalanceNgn?: number;
+  sufficientBalance?: boolean;
+  title?: string;
+  notes: string[];
+};
+
+export function mapApiCardRequestQuote(
+  raw: ApiCardRequestQuote,
+  fallbackKind: 'physical' | 'virtual_usd'
+): AppCardRequestQuote {
+  const kind = mapCardKind(raw.kind ?? raw.type ?? fallbackKind);
+  const issuanceFeeNgn = Number(raw.issuanceFeeNgn ?? raw.issuance_fee_ngn ?? 0);
+  const deliveryFeeNgn = Number(raw.deliveryFeeNgn ?? raw.delivery_fee_ngn ?? 0);
+  const minInitialTopUpUsd = Number(
+    raw.minInitialTopUpUsd ?? raw.min_initial_top_up_usd ?? (kind === 'virtual_usd' ? 10 : 0)
+  );
+  const initialTopUpUsd = Number(
+    raw.initialTopUpUsd ?? raw.initial_top_up_usd ?? minInitialTopUpUsd
+  );
+  const fxRate = Number(raw.fxRate ?? raw.fx_rate ?? 0);
+  const topUpNgn =
+    raw.topUpNgn != null || raw.top_up_ngn != null
+      ? Number(raw.topUpNgn ?? raw.top_up_ngn)
+      : fxRate > 0
+        ? Math.round(initialTopUpUsd * fxRate)
+        : 0;
+  const totalDebitNgn =
+    raw.totalDebitNgn != null || raw.total_debit_ngn != null
+      ? Number(raw.totalDebitNgn ?? raw.total_debit_ngn)
+      : issuanceFeeNgn + deliveryFeeNgn + topUpNgn;
+  return {
+    kind,
+    issuanceFeeNgn,
+    deliveryFeeNgn,
+    minInitialTopUpUsd,
+    initialTopUpUsd,
+    fxRate,
+    topUpNgn,
+    totalDebitNgn,
+    walletBalanceNgn:
+      raw.walletBalanceNgn != null || raw.wallet_balance_ngn != null
+        ? Number(raw.walletBalanceNgn ?? raw.wallet_balance_ngn)
+        : undefined,
+    sufficientBalance:
+      raw.sufficientBalance != null || raw.sufficient_balance != null
+        ? Boolean(raw.sufficientBalance ?? raw.sufficient_balance)
+        : undefined,
+    title: raw.title ?? undefined,
+    notes: Array.isArray(raw.notes) ? raw.notes.filter(Boolean) : [],
+  };
+}
+
+/**
+ * GET /cards/request-quote?kind=physical|virtual_usd&initialTopUpUsd=
+ * Backend populates fees, min first USD top-up, FX rate, NGN conversion, total debit.
+ */
+export async function apiCardRequestQuote(params: {
+  kind: 'physical' | 'virtual_usd';
+  initialTopUpUsd?: number;
+}) {
+  const q = new URLSearchParams({ kind: params.kind });
+  if (params.initialTopUpUsd != null && !Number.isNaN(params.initialTopUpUsd)) {
+    q.set('initialTopUpUsd', String(params.initialTopUpUsd));
+  }
+  const raw = await apiRequest<ApiCardRequestQuote>(`/cards/request-quote?${q.toString()}`);
+  return mapApiCardRequestQuote(raw, params.kind);
+}
+
+export async function apiRequestCard(payload: {
+  kind: 'physical' | 'virtual_usd';
+  deliveryAddress?: string;
+  initialTopUpUsd?: number;
+  pin: string;
+}) {
+  const raw = await apiRequest<ApiCard>('/cards/request', {
+    method: 'POST',
+    body: JSON.stringify({
+      kind: payload.kind,
+      deliveryAddress: payload.deliveryAddress,
+      initialTopUpUsd: payload.initialTopUpUsd,
+      pin: payload.pin,
+    }),
+  });
+  return mapApiCard(raw);
+}
+
+export async function apiFreezeCard(id: string, frozen: boolean, pin?: string) {
+  const raw = await apiRequest<ApiCard>(`/cards/${id}/freeze`, {
+    method: 'POST',
+    body: JSON.stringify({ frozen, pin }),
+  });
+  return mapApiCard(raw);
+}
+
+export async function apiFundVirtualCard(id: string, payload: { amountUsd: number; pin: string }) {
+  return apiRequest<{
+    card?: ApiCard;
+    spendAvailableUsd?: number;
+    walletBalance?: number;
+    fxRate?: number;
+  }>(`/cards/${id}/fund`, {
+    method: 'POST',
+    body: JSON.stringify({
+      amountUsd: payload.amountUsd,
+      amount: payload.amountUsd,
+      pin: payload.pin,
+    }),
+  });
 }
 
 /* ── Ask Money (peer requests + credit) ── */
@@ -559,12 +1303,120 @@ export type ApiCreditOverview = {
   overdraft_limit?: number;
   overdraftUsed?: number;
   overdraft_used?: number;
+  overdraftAvailable?: number;
+  overdraft_available?: number;
   outstandingLoans?: number;
   outstanding_loans?: number;
+  minLoanAmount?: number;
+  min_loan_amount?: number;
+  interestRateFlat?: number;
+  interest_rate_flat?: number;
+  tenors?: string[] | null;
 };
+
+export type ApiLoan = {
+  id: string;
+  title?: string | null;
+  principal?: number | null;
+  outstanding?: number | null;
+  dueDate?: string | null;
+  due_date?: string | null;
+  tenor?: string | null;
+  status?: string | null;
+  interestRate?: number | null;
+  interest_rate?: number | null;
+  disbursedAt?: string | null;
+  disbursed_at?: string | null;
+};
+
+export type ApiLoanRepayment = {
+  id: string;
+  loanId?: string | null;
+  loan_id?: string | null;
+  loanTitle?: string | null;
+  loan_title?: string | null;
+  amount?: number | null;
+  date?: string | null;
+  createdAt?: string | null;
+  created_at?: string | null;
+  reference?: string | null;
+  status?: string | null;
+};
+
+export type AppLoan = {
+  id: string;
+  title: string;
+  principal: number;
+  outstanding: number;
+  dueDate: string;
+  tenor: string;
+  status: 'Active' | 'Overdue' | 'Settled' | 'Pending';
+};
+
+export type AppLoanRepayment = {
+  id: string;
+  loanId?: string;
+  loanTitle: string;
+  amount: number;
+  date: string;
+  reference: string;
+};
+
+function mapLoanStatus(raw?: string | null): AppLoan['status'] {
+  const v = (raw || '').toLowerCase();
+  if (v === 'overdue' || v === 'defaulted' || v === 'late') return 'Overdue';
+  if (v === 'settled' || v === 'paid' || v === 'closed' || v === 'repaid') return 'Settled';
+  if (v === 'pending' || v === 'processing' || v === 'requested') return 'Pending';
+  return 'Active';
+}
+
+export function mapApiLoan(raw: ApiLoan): AppLoan {
+  return {
+    id: String(raw.id),
+    title: String(raw.title || 'Loan'),
+    principal: Number(raw.principal ?? 0),
+    outstanding: Number(raw.outstanding ?? raw.principal ?? 0),
+    dueDate: String(raw.dueDate ?? raw.due_date ?? '—'),
+    tenor: String(raw.tenor || '—'),
+    status: mapLoanStatus(raw.status),
+  };
+}
+
+export function mapApiLoanRepayment(raw: ApiLoanRepayment): AppLoanRepayment {
+  return {
+    id: String(raw.id),
+    loanId: raw.loanId ?? raw.loan_id ?? undefined,
+    loanTitle: String(raw.loanTitle ?? raw.loan_title ?? 'Loan'),
+    amount: Number(raw.amount ?? 0),
+    date: String(raw.date ?? raw.createdAt ?? raw.created_at ?? '—'),
+    reference: String(raw.reference || '—'),
+  };
+}
 
 export async function apiCreditOverview() {
   return apiRequest<ApiCreditOverview>('/credit/overview');
+}
+
+export async function apiCreditLoans(params?: { status?: string }) {
+  const q = new URLSearchParams();
+  if (params?.status) q.set('status', params.status);
+  const suffix = q.toString() ? `?${q.toString()}` : '';
+  const data = await apiRequest<ApiLoan[] | { loans: ApiLoan[] }>(`/credit/loans${suffix}`);
+  const list = Array.isArray(data) ? data : data?.loans ?? [];
+  return list.map(mapApiLoan);
+}
+
+export async function apiLoanRepayments(params?: { loanId?: string }) {
+  const q = new URLSearchParams();
+  if (params?.loanId) q.set('loanId', params.loanId);
+  const suffix = q.toString() ? `?${q.toString()}` : '';
+  const data = await apiRequest<
+    ApiLoanRepayment[] | { repayments: ApiLoanRepayment[]; history?: ApiLoanRepayment[] }
+  >(`/credit/repayments${suffix}`);
+  const list = Array.isArray(data)
+    ? data
+    : data?.repayments ?? data?.history ?? [];
+  return list.map(mapApiLoanRepayment);
 }
 
 export async function apiRequestOverdraft(payload: { amount: number; pin?: string }) {
@@ -575,12 +1427,39 @@ export async function apiRequestOverdraft(payload: { amount: number; pin?: strin
   return raw;
 }
 
-export async function apiRequestLoan(payload: { amount: number; tenor?: string; pin?: string }) {
-  const raw = await apiRequest<ApiMoneyRequest>('/credit/loans/request', {
+/** Optional: pay down overdraft used balance from wallet. */
+export async function apiRepayOverdraft(payload: { amount: number; pin: string }) {
+  return apiRequest<ApiCreditOverview>('/credit/overdraft/repay', {
     method: 'POST',
     body: JSON.stringify(payload),
   });
-  return mapApiMoneyRequest(raw);
+}
+
+export async function apiRequestLoan(payload: { amount: number; tenor?: string; pin?: string }) {
+  const raw = await apiRequest<ApiLoan | ApiMoneyRequest>('/credit/loans/request', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  // Prefer loan object; fall back to money-request shaped response
+  if (raw && 'outstanding' in raw) {
+    return { kind: 'loan' as const, loan: mapApiLoan(raw as ApiLoan) };
+  }
+  return { kind: 'request' as const, request: mapApiMoneyRequest(raw as ApiMoneyRequest) };
+}
+
+export async function apiRepayLoan(
+  id: string,
+  payload: { amount: number; pin: string }
+) {
+  return apiRequest<{
+    loan?: ApiLoan;
+    repayment?: ApiLoanRepayment;
+    outstanding?: number;
+    walletBalance?: number;
+  }>(`/credit/loans/${id}/repay`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
 }
 
 /* ── Save Together ── */
@@ -833,15 +1712,780 @@ export async function apiLogout() {
 export function mapApiWallets(
   wallets: ApiBootstrap['wallets']
 ): WalletAccount[] {
-  return wallets.map(w => ({
-    id: w.id,
-    name: w.name,
-    kind: w.kind,
-    accountNumber: w.accountNumber,
-    bankName: w.bankName,
-    balance: w.balance,
-    subtitle: w.subtitle,
-    accountName: w.accountName,
-    ussd: w.ussd,
+  return wallets.map(mapApiWallet);
+}
+
+/* ── Analytics (Utilities screen) ── */
+
+export type ApiAnalyticsChannel = {
+  id?: string;
+  label?: string;
+  pct?: number;
+  amount?: number;
+  color?: string;
+};
+
+export type ApiAnalyticsDay = {
+  day?: string;
+  label?: string;
+  amount?: number;
+  heightPct?: number;
+};
+
+export type ApiAnalyticsCategory = {
+  label?: string;
+  amount?: number;
+  pct?: number;
+  icon?: string;
+};
+
+export type ApiCashflowAnalytics = {
+  context?: string;
+  periodDays?: number;
+  period_days?: number;
+  healthLabel?: string;
+  health_label?: string;
+  healthScorePct?: number;
+  health_score_pct?: number;
+  marginPct?: number;
+  margin_pct?: number;
+  netBalance?: number;
+  net_balance?: number;
+  burnPerDay?: number;
+  burn_per_day?: number;
+  runwayDays?: number;
+  runway_days?: number;
+  totalInflow?: number;
+  total_inflow?: number;
+  totalOutflow?: number;
+  total_outflow?: number;
+  inflowCount?: number;
+  inflow_count?: number;
+  outflowCount?: number;
+  outflow_count?: number;
+  inflowChangePct?: number;
+  inflow_change_pct?: number;
+  channels?: ApiAnalyticsChannel[];
+  velocityAvgPerDay?: number;
+  velocity_avg_per_day?: number;
+  velocityDays?: ApiAnalyticsDay[];
+  velocity_days?: ApiAnalyticsDay[];
+  categories?: ApiAnalyticsCategory[];
+};
+
+export type AppCashflowAnalytics = {
+  healthLabel: string;
+  healthScorePct: number;
+  marginPct: number;
+  netBalance: number;
+  burnPerDay: number;
+  runwayDays: number;
+  totalInflow: number;
+  totalOutflow: number;
+  inflowCount: number;
+  outflowCount: number;
+  inflowChangePct: number;
+  channels: { label: string; pct: number; amount: number }[];
+  velocityAvgPerDay: number;
+  velocityDays: { day: string; amount: number; heightPct: number }[];
+  categories: { label: string; amount: number; pct: number; icon: string }[];
+};
+
+export function mapApiCashflowAnalytics(raw: ApiCashflowAnalytics): AppCashflowAnalytics {
+  const channels = (raw.channels || []).map(c => ({
+    label: String(c.label || 'Channel'),
+    pct: Number(c.pct ?? 0),
+    amount: Number(c.amount ?? 0),
   }));
+  const velocityDays = (raw.velocityDays ?? raw.velocity_days ?? []).map(d => ({
+    day: String(d.day ?? d.label ?? ''),
+    amount: Number(d.amount ?? 0),
+    heightPct: Number(d.heightPct ?? 50),
+  }));
+  const categories = (raw.categories || []).map(c => ({
+    label: String(c.label || 'Category'),
+    amount: Number(c.amount ?? 0),
+    pct: Number(c.pct ?? 0),
+    icon: String(c.icon || 'receipt_long'),
+  }));
+  return {
+    healthLabel: String(raw.healthLabel ?? raw.health_label ?? 'Optimal flow'),
+    healthScorePct: Number(raw.healthScorePct ?? raw.health_score_pct ?? 0),
+    marginPct: Number(raw.marginPct ?? raw.margin_pct ?? 0),
+    netBalance: Number(raw.netBalance ?? raw.net_balance ?? 0),
+    burnPerDay: Number(raw.burnPerDay ?? raw.burn_per_day ?? 0),
+    runwayDays: Number(raw.runwayDays ?? raw.runway_days ?? 0),
+    totalInflow: Number(raw.totalInflow ?? raw.total_inflow ?? 0),
+    totalOutflow: Number(raw.totalOutflow ?? raw.total_outflow ?? 0),
+    inflowCount: Number(raw.inflowCount ?? raw.inflow_count ?? 0),
+    outflowCount: Number(raw.outflowCount ?? raw.outflow_count ?? 0),
+    inflowChangePct: Number(raw.inflowChangePct ?? raw.inflow_change_pct ?? 0),
+    channels,
+    velocityAvgPerDay: Number(raw.velocityAvgPerDay ?? raw.velocity_avg_per_day ?? 0),
+    velocityDays,
+    categories,
+  };
+}
+
+/** GET /analytics/cashflow?context=personal|business&periodDays=30|90|365 */
+export async function apiCashflowAnalytics(params: {
+  context: 'personal' | 'business';
+  periodDays: 30 | 90 | 365;
+}) {
+  const q = new URLSearchParams({
+    context: params.context,
+    periodDays: String(params.periodDays),
+  });
+  const raw = await apiRequest<ApiCashflowAnalytics>(`/analytics/cashflow?${q}`);
+  return mapApiCashflowAnalytics(raw);
+}
+
+/* ── Settlement ── */
+
+export type ApiSettlementBank = {
+  id?: string;
+  bankName?: string;
+  bank_name?: string;
+  accountNumber?: string;
+  account_number?: string;
+  accountName?: string;
+  account_name?: string;
+  sharePct?: number;
+  share_pct?: number;
+};
+
+export type ApiSettlementBatch = {
+  id: string;
+  reference?: string;
+  amount?: number;
+  status?: string;
+  bankName?: string;
+  bank_name?: string;
+  scheduledAt?: string;
+  scheduled_at?: string;
+  postedAt?: string;
+  posted_at?: string;
+  date?: string;
+};
+
+export type ApiSettlementOverview = {
+  pendingAmount?: number;
+  pending_amount?: number;
+  nextWindowAt?: string;
+  next_window_at?: string;
+  nextWindowLabel?: string;
+  next_window_label?: string;
+  cutOffLabel?: string;
+  cut_off_label?: string;
+  destinationSummary?: string;
+  destination_summary?: string;
+  availableForSettlement?: number;
+  available_for_settlement?: number;
+  minInstantAmount?: number;
+  min_instant_amount?: number;
+  instantFeeNgn?: number;
+  instant_fee_ngn?: number;
+  banks?: ApiSettlementBank[];
+  recent?: ApiSettlementBatch[];
+  batches?: ApiSettlementBatch[];
+};
+
+export type AppSettlementOverview = {
+  pendingAmount: number;
+  availableForSettlement: number;
+  nextWindowLabel: string;
+  cutOffLabel: string;
+  destinationSummary: string;
+  minInstantAmount: number;
+  instantFeeNgn: number;
+  banks: {
+    id: string;
+    bankName: string;
+    accountNumber: string;
+    accountName: string;
+    sharePct: number;
+  }[];
+  recent: {
+    id: string;
+    reference: string;
+    amount: number;
+    status: string;
+    bankName: string;
+    when: string;
+  }[];
+};
+
+export function mapApiSettlementOverview(raw: ApiSettlementOverview): AppSettlementOverview {
+  const banks = (raw.banks || []).map((b, i) => ({
+    id: String(b.id || `bank-${i}`),
+    bankName: String(b.bankName ?? b.bank_name ?? 'Bank'),
+    accountNumber: String(b.accountNumber ?? b.account_number ?? ''),
+    accountName: String(b.accountName ?? b.account_name ?? ''),
+    sharePct: Number(b.sharePct ?? b.share_pct ?? 0),
+  }));
+  const recentSrc = raw.recent ?? raw.batches ?? [];
+  const recent = recentSrc.map(b => ({
+    id: String(b.id),
+    reference: String(b.reference || b.id),
+    amount: Number(b.amount ?? 0),
+    status: String(b.status || 'Pending'),
+    bankName: String(b.bankName ?? b.bank_name ?? ''),
+    when: String(b.postedAt ?? b.posted_at ?? b.scheduledAt ?? b.scheduled_at ?? b.date ?? '—'),
+  }));
+  return {
+    pendingAmount: Number(raw.pendingAmount ?? raw.pending_amount ?? 0),
+    availableForSettlement: Number(
+      raw.availableForSettlement ?? raw.available_for_settlement ?? 0
+    ),
+    nextWindowLabel: String(
+      raw.nextWindowLabel ?? raw.next_window_label ?? raw.nextWindowAt ?? raw.next_window_at ?? '—'
+    ),
+    cutOffLabel: String(raw.cutOffLabel ?? raw.cut_off_label ?? ''),
+    destinationSummary: String(
+      raw.destinationSummary ?? raw.destination_summary ?? 'Settlement banks'
+    ),
+    minInstantAmount: Number(raw.minInstantAmount ?? raw.min_instant_amount ?? 0),
+    instantFeeNgn: Number(raw.instantFeeNgn ?? raw.instant_fee_ngn ?? 0),
+    banks,
+    recent,
+  };
+}
+
+export async function apiSettlementOverview() {
+  const raw = await apiRequest<ApiSettlementOverview>('/settlement/overview');
+  return mapApiSettlementOverview(raw);
+}
+
+export async function apiSettlementBatches() {
+  const data = await apiRequest<
+    ApiSettlementBatch[] | { batches: ApiSettlementBatch[]; recent?: ApiSettlementBatch[] }
+  >('/settlement/batches');
+  const list = Array.isArray(data) ? data : data?.batches ?? data?.recent ?? [];
+  return list.map(b => ({
+    id: String(b.id),
+    reference: String(b.reference || b.id),
+    amount: Number(b.amount ?? 0),
+    status: String(b.status || 'Pending'),
+    bankName: String(b.bankName ?? b.bank_name ?? ''),
+    when: String(b.postedAt ?? b.posted_at ?? b.scheduledAt ?? b.scheduled_at ?? b.date ?? '—'),
+  }));
+}
+
+export async function apiRequestInstantSettlement(payload: {
+  amount: number;
+  pin: string;
+  bankId?: string;
+}) {
+  return apiRequest<{
+    batch?: ApiSettlementBatch;
+    reference?: string;
+    feeNgn?: number;
+    availableForSettlement?: number;
+  }>('/settlement/instant', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+/* ── Statements ── */
+
+export type StatementKind = 'wallet' | 'savings' | 'card' | 'pos' | 'business';
+
+export async function apiCreateStatement(payload: {
+  kind: StatementKind;
+  period: '7' | '30' | '90' | '365';
+  format: 'pdf' | 'csv';
+  posId?: string;
+  context?: 'personal' | 'business';
+}) {
+  return apiRequest<{
+    downloadUrl?: string;
+    download_url?: string;
+    url?: string;
+    expiresAt?: string;
+    fileName?: string;
+  }>('/statements', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+/* ── Recurring payments ── */
+
+export type ApiRecurringPlan = {
+  id: string;
+  recipientName?: string;
+  recipient_name?: string;
+  bankName?: string;
+  bank_name?: string;
+  bankCode?: string;
+  bank_code?: string;
+  accountNumber?: string;
+  account_number?: string;
+  amount?: number;
+  narration?: string;
+  scheduleLabel?: string;
+  schedule_label?: string;
+  scheduleMode?: string;
+  schedule_mode?: string;
+  customCadence?: string;
+  custom_cadence?: string;
+  dayOfMonth?: number;
+  day_of_month?: number;
+  everyNDays?: number;
+  every_n_days?: number;
+  nextRun?: string;
+  next_run?: string;
+  active?: boolean;
+  channel?: string;
+  walletId?: string;
+  wallet_id?: string;
+};
+
+export type ApiRecurringRun = {
+  id: string;
+  planId?: string;
+  plan_id?: string;
+  recipientName?: string;
+  recipient_name?: string;
+  amount?: number;
+  status?: string;
+  date?: string;
+  time?: string;
+  reference?: string;
+};
+
+export type AppRecurringPlan = {
+  id: string;
+  recipientName: string;
+  bankName: string;
+  accountNumber: string;
+  amount: number;
+  narration: string;
+  scheduleLabel: string;
+  nextRun: string;
+  active: boolean;
+};
+
+export type AppRecurringRun = {
+  id: string;
+  planId: string;
+  recipientName: string;
+  amount: number;
+  status: 'Successful' | 'Failed' | 'Pending';
+  date: string;
+  time: string;
+  reference: string;
+};
+
+export function mapApiRecurringPlan(raw: ApiRecurringPlan): AppRecurringPlan {
+  return {
+    id: String(raw.id),
+    recipientName: String(raw.recipientName ?? raw.recipient_name ?? 'Beneficiary'),
+    bankName: String(raw.bankName ?? raw.bank_name ?? ''),
+    accountNumber: String(raw.accountNumber ?? raw.account_number ?? ''),
+    amount: Number(raw.amount ?? 0),
+    narration: String(raw.narration || ''),
+    scheduleLabel: String(raw.scheduleLabel ?? raw.schedule_label ?? ''),
+    nextRun: String(raw.nextRun ?? raw.next_run ?? '—'),
+    active: raw.active !== false,
+  };
+}
+
+export function mapApiRecurringRun(raw: ApiRecurringRun): AppRecurringRun {
+  const st = (raw.status || '').toLowerCase();
+  const status: AppRecurringRun['status'] =
+    st === 'failed' || st === 'failure' ? 'Failed' : st === 'pending' ? 'Pending' : 'Successful';
+  return {
+    id: String(raw.id),
+    planId: String(raw.planId ?? raw.plan_id ?? ''),
+    recipientName: String(raw.recipientName ?? raw.recipient_name ?? ''),
+    amount: Number(raw.amount ?? 0),
+    status,
+    date: String(raw.date || '—'),
+    time: String(raw.time || ''),
+    reference: String(raw.reference || '—'),
+  };
+}
+
+export async function apiRecurringPlans() {
+  const data = await apiRequest<ApiRecurringPlan[] | { plans: ApiRecurringPlan[] }>('/recurring');
+  const list = Array.isArray(data) ? data : data?.plans ?? [];
+  return list.map(mapApiRecurringPlan);
+}
+
+export async function apiCreateRecurring(payload: {
+  channel: 'bank' | 'wallet';
+  recipientName: string;
+  bankName?: string;
+  bankCode?: string;
+  accountNumber: string;
+  amount: number;
+  narration?: string;
+  scheduleMode: 'end_of_month' | 'custom';
+  customCadence?: 'daily' | 'weekly' | 'monthly' | 'every_n_days';
+  dayOfMonth?: number;
+  everyNDays?: number;
+  pin: string;
+}) {
+  const raw = await apiRequest<ApiRecurringPlan>('/recurring', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  return mapApiRecurringPlan(raw);
+}
+
+export async function apiPatchRecurring(
+  id: string,
+  payload: { active: boolean }
+) {
+  const raw = await apiRequest<ApiRecurringPlan>(`/recurring/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+  return mapApiRecurringPlan(raw);
+}
+
+export async function apiDeleteRecurring(id: string) {
+  return apiRequest<{ ok?: boolean }>(`/recurring/${id}`, { method: 'DELETE' });
+}
+
+export async function apiRecurringRuns(planId?: string) {
+  const path = planId ? `/recurring/${planId}/runs` : '/recurring/runs';
+  const data = await apiRequest<ApiRecurringRun[] | { runs: ApiRecurringRun[] }>(path);
+  const list = Array.isArray(data) ? data : data?.runs ?? [];
+  return list.map(mapApiRecurringRun);
+}
+
+/* ── X-Points ── */
+
+export type ApiXPointsLedgerItem = {
+  id: string;
+  title?: string;
+  meta?: string;
+  amount?: number;
+  xPoints?: number;
+  x_points?: number;
+  commission?: number;
+  when?: string;
+  date?: string;
+  status?: string;
+};
+
+export type ApiXPointsSummary = {
+  available?: number;
+  pending?: number;
+  redeemed?: number;
+  total?: number;
+  commissionEarned?: number;
+  commission_earned?: number;
+  xpToNaira?: number;
+  xp_to_naira?: number;
+  rateLabel?: string;
+  rate_label?: string;
+  history?: ApiXPointsLedgerItem[];
+  ledger?: ApiXPointsLedgerItem[];
+};
+
+export type AppXPointsSummary = {
+  available: number;
+  pending: number;
+  redeemed: number;
+  total: number;
+  commissionEarned: number;
+  xpToNaira: number;
+  rateLabel: string;
+  ledger: {
+    id: string;
+    title: string;
+    meta: string;
+    amount: number;
+    xPoints: number;
+    commission: number;
+    when: string;
+    status: string;
+  }[];
+};
+
+export function mapApiXPointsSummary(raw: ApiXPointsSummary): AppXPointsSummary {
+  const available = Number(raw.available ?? 0);
+  const pending = Number(raw.pending ?? 0);
+  const redeemed = Number(raw.redeemed ?? 0);
+  const total = Number(raw.total ?? available + pending + redeemed);
+  const ledgerSrc = raw.history ?? raw.ledger ?? [];
+  return {
+    available,
+    pending,
+    redeemed,
+    total,
+    commissionEarned: Number(raw.commissionEarned ?? raw.commission_earned ?? 0),
+    xpToNaira: Number(raw.xpToNaira ?? raw.xp_to_naira ?? 5),
+    rateLabel: String(raw.rateLabel ?? raw.rate_label ?? ''),
+    ledger: ledgerSrc.map(item => ({
+      id: String(item.id),
+      title: String(item.title || 'Entry'),
+      meta: String(item.meta || ''),
+      amount: Number(item.amount ?? 0),
+      xPoints: Number(item.xPoints ?? item.x_points ?? 0),
+      commission: Number(item.commission ?? 0),
+      when: String(item.when ?? item.date ?? '—'),
+      status: String(item.status || 'Successful'),
+    })),
+  };
+}
+
+export async function apiXPoints() {
+  const raw = await apiRequest<ApiXPointsSummary>('/xpoints');
+  return mapApiXPointsSummary(raw);
+}
+
+export async function apiRedeemXPoints(payload: {
+  channel: 'wallet' | 'airtime' | 'data' | 'commission';
+  amount: number;
+  pin: string;
+  phone?: string;
+}) {
+  return apiRequest<{
+    available?: number;
+    redeemed?: number;
+    pending?: number;
+    walletBalance?: number;
+    cashValue?: number;
+    ledgerItem?: ApiXPointsLedgerItem;
+  }>('/xpoints/redeem', {
+    method: 'POST',
+    body: JSON.stringify({
+      channel: payload.channel,
+      amount: payload.amount,
+      xPoints: payload.amount,
+      pin: payload.pin,
+      phone: payload.phone,
+    }),
+  });
+}
+
+/* ── POS / Terminals ── */
+
+export type ApiTerminal = {
+  id: string;
+  terminalId?: string;
+  terminal_id?: string;
+  serialNumber?: string;
+  serial_number?: string;
+  name?: string;
+  model?: string;
+  address?: string;
+  status?: string;
+  balance?: number;
+  dateMapped?: string;
+  date_mapped?: string;
+  lastTransaction?: { label?: string; at?: string } | null;
+  last_transaction?: { label?: string; at?: string } | null;
+  pendingAddress?: string | null;
+  pending_address?: string | null;
+  addressRequestStatus?: string | null;
+  address_request_status?: string | null;
+};
+
+export type ApiTerminalTx = {
+  id: string;
+  terminalId?: string;
+  terminal_id?: string;
+  type?: string;
+  amount?: number;
+  status?: string;
+  reference?: string;
+  date?: string;
+  time?: string;
+  commission?: number;
+  xPoints?: number;
+  x_points?: number;
+};
+
+function mapTerminalStatus(raw?: string | null): import('../types').TerminalStatus {
+  const v = (raw || '').toLowerCase();
+  if (v === 'offline') return 'Offline';
+  if (v === 'locked' || v === 'blocked') return 'Locked';
+  if (v === 'inactive') return 'Inactive';
+  if (v === 'pending' || v === 'processing') return 'Pending';
+  return 'Active';
+}
+
+function mapAddressRequestStatus(
+  raw?: string | null
+): import('../types').Terminal['addressRequestStatus'] {
+  const v = (raw || '').toLowerCase();
+  if (v === 'pending') return 'Pending';
+  if (v === 'approved') return 'Approved';
+  if (v === 'rejected') return 'Rejected';
+  return 'None';
+}
+
+export function mapApiTerminal(raw: ApiTerminal): import('../types').Terminal {
+  const last = raw.lastTransaction ?? raw.last_transaction;
+  return {
+    id: String(raw.id),
+    terminalId: String(raw.terminalId ?? raw.terminal_id ?? raw.id),
+    serialNumber: String(raw.serialNumber ?? raw.serial_number ?? '—'),
+    name: String(raw.name || 'POS'),
+    model: String(raw.model || '—'),
+    address: String(raw.address || '—'),
+    status: mapTerminalStatus(raw.status),
+    balance: Number(raw.balance ?? 0),
+    dateMapped: String(raw.dateMapped ?? raw.date_mapped ?? '—'),
+    lastTransaction: {
+      label: String(last?.label || 'No transactions yet'),
+      at: String(last?.at || '—'),
+    },
+    pendingAddress: raw.pendingAddress ?? raw.pending_address ?? undefined,
+    addressRequestStatus: mapAddressRequestStatus(
+      raw.addressRequestStatus ?? raw.address_request_status
+    ),
+  };
+}
+
+export function mapApiTerminalTx(raw: ApiTerminalTx): import('../types').TerminalTx {
+  const st = (raw.status || '').toLowerCase();
+  let status: import('../types').TerminalTx['status'] = 'Successful';
+  if (st === 'failed' || st === 'failure') status = 'Failed';
+  else if (st === 'pending') status = 'Pending';
+  else if (st === 'reversed' || st === 'reversal') status = 'Reversed';
+  else if (st === 'declined') status = 'Declined';
+  return {
+    id: String(raw.id),
+    terminalId: String(raw.terminalId ?? raw.terminal_id ?? ''),
+    type: String(raw.type || 'Transaction'),
+    amount: Number(raw.amount ?? 0),
+    status,
+    reference: String(raw.reference || '—'),
+    date: String(raw.date || '—'),
+    time: String(raw.time || ''),
+    commission: raw.commission != null ? Number(raw.commission) : undefined,
+    xPoints: Number(raw.xPoints ?? raw.x_points ?? 0) || undefined,
+  };
+}
+
+export async function apiTerminals() {
+  const data = await apiRequest<ApiTerminal[] | { terminals: ApiTerminal[] }>('/terminals');
+  const list = Array.isArray(data) ? data : data?.terminals ?? [];
+  return list.map(mapApiTerminal);
+}
+
+export async function apiTerminal(id: string) {
+  const raw = await apiRequest<ApiTerminal>(`/terminals/${id}`);
+  return mapApiTerminal(raw);
+}
+
+export async function apiTerminalTransactions(id: string) {
+  const data = await apiRequest<
+    ApiTerminalTx[] | { transactions: ApiTerminalTx[]; txs?: ApiTerminalTx[] }
+  >(`/terminals/${id}/transactions`);
+  const list = Array.isArray(data)
+    ? data
+    : data?.transactions ?? data?.txs ?? [];
+  return list.map(mapApiTerminalTx);
+}
+
+export async function apiTerminalXPoints(id: string) {
+  return apiRequest<{
+    total?: number;
+    available?: number;
+    pending?: number;
+    redeemed?: number;
+    commission?: number;
+  }>(`/terminals/${id}/xpoints`);
+}
+
+export async function apiRenameTerminal(id: string, name: string) {
+  const raw = await apiRequest<ApiTerminal>(`/terminals/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ name }),
+  });
+  return mapApiTerminal(raw);
+}
+
+export async function apiFundTerminal(
+  id: string,
+  payload: { amount: number; pin: string }
+) {
+  return apiRequest<{
+    terminal?: ApiTerminal;
+    balance?: number;
+    walletBalance?: number;
+    reference?: string;
+  }>(`/terminals/${id}/fund`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function apiWithdrawTerminal(
+  id: string,
+  payload: { amount: number; pin?: string }
+) {
+  return apiRequest<{
+    terminal?: ApiTerminal;
+    balance?: number;
+    walletBalance?: number;
+    reference?: string;
+  }>(`/terminals/${id}/withdraw`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function apiSweepTerminals(payload: {
+  terminalIds: 'all' | string[];
+  amount?: number;
+  pin: string;
+}) {
+  return apiRequest<{
+    swept?: number;
+    walletBalance?: number;
+    terminals?: ApiTerminal[];
+  }>('/terminals/sweep', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function apiLockTerminal(id: string) {
+  const raw = await apiRequest<ApiTerminal>(`/terminals/${id}/lock`, { method: 'POST' });
+  return mapApiTerminal(raw);
+}
+
+export async function apiUnlockTerminal(id: string, pin: string) {
+  const raw = await apiRequest<ApiTerminal>(`/terminals/${id}/unlock`, {
+    method: 'POST',
+    body: JSON.stringify({ pin }),
+  });
+  return mapApiTerminal(raw);
+}
+
+export async function apiTerminalAddressRequest(
+  id: string,
+  payload: { address: string; reason: string }
+) {
+  const raw = await apiRequest<ApiTerminal>(`/terminals/${id}/address-request`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  return mapApiTerminal(raw);
+}
+
+export async function apiTerminalSupport(
+  id: string,
+  payload: {
+    type: string;
+    note?: string;
+    transactionId?: string;
+  }
+) {
+  return apiRequest<{ ticketId?: string; reference?: string; status?: string }>(
+    `/terminals/${id}/support`,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }
+  );
 }

@@ -9,6 +9,9 @@ import {
   NearbyPeer,
   ShopTerminal,
   Beneficiary,
+  SavingsPlan,
+  SavingsPlanType,
+  SavingsSummary,
 } from '../types';
 import { SUPPORTED_BANKS } from '../data/initialData';
 import {
@@ -27,11 +30,14 @@ import {
   apiContributePot,
   apiCreateMoneyRequest,
   apiCreatePot,
+  apiCreateSavingsPlan,
   apiCreateTransfer,
   apiCreditOverview,
   apiDeclineMoneyRequest,
   apiDeclinePot,
   apiDeleteAccount,
+  apiFlexibleDeposit,
+  apiFlexibleWithdraw,
   apiLogout,
   apiMe,
   apiMoneyRequests,
@@ -39,10 +45,14 @@ import {
   apiProximityPay,
   apiRequestLoan,
   apiRequestOverdraft,
+  apiSavings,
   apiShopPay,
+  apiStrictAutosave,
   apiTransactions,
   apiUpdateMe,
+  apiVerifyPin,
   apiWallets,
+  mapApiSavingsSummary,
   mapApiUserProfile,
   mapApiWallets,
   type ApiBank,
@@ -98,6 +108,10 @@ interface TransactionContextType {
   // Navigation
   activeScreen: ScreenType;
   setActiveScreen: (screen: ScreenType) => void;
+  /** Prefill category when opening Pay Bills (airtime | data | electricity | …) */
+  payBillsCategory: string | null;
+  openPayBills: (category?: string) => void;
+  clearPayBillsCategory: () => void;
   navigateBack: () => void;
   
   // Account State
@@ -115,6 +129,21 @@ interface TransactionContextType {
   businessBalance: number;
   flexibleSavings: number;
   strictSavings: number;
+  savingsPlans: SavingsPlan[];
+  savingsMeta: {
+    blendedApy: number;
+    interestToday: number;
+    lifetimeInterest: number;
+  };
+  refreshSavings: () => Promise<void>;
+  createSavingsPlan: (params: {
+    name: string;
+    type: SavingsPlanType;
+    initialAmount?: number;
+    targetAmount?: number;
+    maturityDate?: string;
+    percentage?: number;
+  }) => Promise<boolean>;
   dailySpent: number;
   dailyLimit: number;
   cardFrozen: boolean;
@@ -123,6 +152,7 @@ interface TransactionContextType {
   setBiometricsActive: (active: boolean) => void;
   strictAutoSave: boolean;
   setStrictAutoSave: (enabled: boolean) => void;
+  toggleStrictAutoSave: (enabled: boolean, percentage?: number) => Promise<void>;
   balanceHidden: boolean;
   setBalanceHidden: (hidden: boolean) => void;
   accountTier: string;
@@ -143,6 +173,10 @@ interface TransactionContextType {
   login: () => void;
   establishSession: (accessToken: string) => Promise<void>;
   logout: () => void;
+  /** POS management requires verified transaction PIN once per session */
+  posManagementUnlocked: boolean;
+  unlockPosManagement: (pin: string) => Promise<boolean>;
+  lockPosManagement: () => void;
   
   // Real-time Transactions
   transactions: Transaction[];
@@ -172,8 +206,8 @@ interface TransactionContextType {
   }) => string; // returns generated token or reference
   
   // Savings Actions
-  quickSave: (amount: number) => void;
-  withdrawFlexible: (amount: number) => void;
+  quickSave: (amount: number) => Promise<boolean>;
+  withdrawFlexible: (amount: number) => Promise<boolean>;
   
   // Real-time Inward Simulator
   simulateInwardTransfer: (amount?: number, sender?: string) => void;
@@ -301,12 +335,20 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
   // Navigation
   const [activeScreen, setActiveScreenState] = useState<ScreenType>('hub');
   const [screenHistory, setScreenHistory] = useState<ScreenType[]>(['hub']);
+  const [payBillsCategory, setPayBillsCategory] = useState<string | null>(null);
 
   const setActiveScreen = (screen: ScreenType) => {
     setScreenHistory(prev => [...prev, screen]);
     setActiveScreenState(screen);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
+
+  const openPayBills = (category?: string) => {
+    setPayBillsCategory(category?.trim() || null);
+    setActiveScreen('paybills');
+  };
+
+  const clearPayBillsCategory = () => setPayBillsCategory(null);
 
   const navigateBack = () => {
     if (screenHistory.length > 1) {
@@ -329,14 +371,20 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
   const [selectedWalletId, setSelectedWalletId] = useState<string>('personal');
   const [personalBalance, setPersonalBalance] = useState<number>(0);
   const [businessBalance, setBusinessBalance] = useState<number>(14250000.00);
-  const [flexibleSavings, setFlexibleSavings] = useState<number>(214558.04);
-  const [strictSavings, setStrictSavings] = useState<number>(2250.00);
-  const [dailySpent, setDailySpent] = useState<number>(2450000);
+  const [flexibleSavings, setFlexibleSavings] = useState<number>(0);
+  const [strictSavings, setStrictSavings] = useState<number>(0);
+  const [savingsPlans, setSavingsPlans] = useState<SavingsPlan[]>([]);
+  const [savingsMeta, setSavingsMeta] = useState({
+    blendedApy: 0,
+    interestToday: 0,
+    lifetimeInterest: 0,
+  });
+  const [dailySpent, setDailySpent] = useState<number>(0);
   const [dailyLimit, setDailyLimit] = useState<number>(5000000);
   
   const [cardFrozen, setCardFrozen] = useState<boolean>(false);
   const [biometricsActive, setBiometricsActive] = useState<boolean>(true);
-  const [strictAutoSave, setStrictAutoSave] = useState<boolean>(true);
+  const [strictAutoSave, setStrictAutoSave] = useState<boolean>(false);
   const [balanceHidden, setBalanceHidden] = useState<boolean>(false);
   const [accountTier, setAccountTier] = useState<string>('Tier 1');
   const [kycStatus, setKycStatus] = useState<string>('none');
@@ -350,6 +398,18 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
     if (profile.kyc?.status) setKycStatus(profile.kyc.status);
   };
 
+  const applySavingsSummary = (summary: SavingsSummary) => {
+    setFlexibleSavings(summary.flexibleBalance);
+    setStrictSavings(summary.strictBalance);
+    setStrictAutoSave(Boolean(summary.strictAutoSave));
+    setSavingsPlans(Array.isArray(summary.plans) ? summary.plans : []);
+    setSavingsMeta({
+      blendedApy: Number(summary.blendedApy ?? 0),
+      interestToday: Number(summary.interestToday ?? 0),
+      lifetimeInterest: Number(summary.lifetimeInterest ?? 0),
+    });
+  };
+
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
     try {
       return Boolean(getAccessToken());
@@ -357,6 +417,7 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
       return false;
     }
   });
+  const [posManagementUnlocked, setPosManagementUnlocked] = useState(false);
   const [authReady, setAuthReady] = useState<boolean>(() => !getAccessToken());
   const [hasSeenIntro, setHasSeenIntro] = useState<boolean>(() => {
     try {
@@ -414,9 +475,12 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
         : mapped.find(w => w.kind === 'personal')?.id ?? mapped[0]?.id ?? 'personal';
     setSelectedWalletId(selected);
     applyWalletBalances(mapped.length ? mapped : INITIAL_WALLETS);
-    setFlexibleSavings(data.savings.flexibleBalance);
-    setStrictSavings(data.savings.strictBalance);
-    setStrictAutoSave(data.savings.strictAutoSave);
+    applySavingsSummary({
+      flexibleBalance: data.savings.flexibleBalance,
+      strictBalance: data.savings.strictBalance,
+      strictAutoSave: data.savings.strictAutoSave,
+      plans: [],
+    });
     setDailySpent(data.limits.dailySpent);
     setDailyLimit(data.limits.dailySpendCap);
     setOverdraftLimit(data.overdraftLimit);
@@ -472,6 +536,12 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
     } catch {
       // bootstrap user is enough until Profile refresh
     }
+    try {
+      const savings = await apiSavings();
+      applySavingsSummary(savings);
+    } catch {
+      // keep bootstrap savings balances
+    }
   };
 
   const refreshProfile = async () => {
@@ -487,6 +557,7 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
     setAccessToken(accessToken);
     await applyBootstrap();
     setIsAuthenticated(true);
+    setPosManagementUnlocked(false);
     setActiveScreenState('hub');
     setScreenHistory(['hub']);
     try {
@@ -498,6 +569,7 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
 
   const login = () => {
     setIsAuthenticated(true);
+    setPosManagementUnlocked(false);
     setActiveScreenState('hub');
     setScreenHistory(['hub']);
     try {
@@ -511,6 +583,7 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
     void apiLogout();
     setAccessToken(null);
     setIsAuthenticated(false);
+    setPosManagementUnlocked(false);
     setUserProfile(null);
     setAccountFullName('');
     setMoneyRequests([]);
@@ -523,6 +596,23 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
       // ignore
     }
   };
+
+  const unlockPosManagement = async (pin: string): Promise<boolean> => {
+    try {
+      await apiVerifyPin(pin);
+      setPosManagementUnlocked(true);
+      return true;
+    } catch (err) {
+      showToast(
+        'PIN required',
+        err instanceof ApiError ? err.message : 'Enter your set transaction PIN to open POS.',
+        'warning'
+      );
+      return false;
+    }
+  };
+
+  const lockPosManagement = () => setPosManagementUnlocked(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -935,66 +1025,95 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
     return generatedToken;
   };
 
-  // Quick Save logic
-  const quickSave = (amount: number) => {
-    if (personalBalance < amount) {
-      showToast('Insufficient Balance', 'Wallet balance is too low for this save amount.', 'warning');
-      return;
+  // Quick Save / withdraw — live flexible vault
+  const refreshSavings = async () => {
+    try {
+      const savings = await apiSavings();
+      applySavingsSummary(savings);
+    } catch {
+      // keep last known
     }
-    setPersonalBalance(prev => prev - amount);
-    setFlexibleSavings(prev => prev + amount);
-
-    const t = getFormattedTime();
-    const refCode = `XTR-${Math.floor(10000000 + Math.random() * 90000000)}`;
-    const newTx: Transaction = {
-      id: `tx-${Date.now()}`,
-      title: 'Flexible Quick Save',
-      subtitle: `Savings Vault • ${t.slice(0, 5)}`,
-      date: 'Today - 11 Sep 2026',
-      timestamp: t.slice(0, 5),
-      fullTime: t,
-      amount,
-      type: 'debit',
-      status: 'Settled',
-      category: 'savings',
-      reference: refCode,
-      note: 'Flexible deposit earning bonus interest',
-    };
-
-    setTransactions(prev => [newTx, ...prev]);
-    playChime('success');
-    showToast('Quick Save Confirmed', `+₦${amount.toLocaleString()} moved to Flexible Savings`);
   };
 
-  // Withdraw from flexible savings
-  const withdrawFlexible = (amount: number) => {
-    if (flexibleSavings < amount) {
-      showToast('Insufficient Flexible Savings', 'Amount exceeds flexible savings balance.', 'warning');
-      return;
+  const createSavingsPlan = async (params: {
+    name: string;
+    type: SavingsPlanType;
+    initialAmount?: number;
+    targetAmount?: number;
+    maturityDate?: string;
+    percentage?: number;
+  }): Promise<boolean> => {
+    try {
+      const plan = await apiCreateSavingsPlan(params);
+      setSavingsPlans(prev => [plan, ...prev.filter(p => p.id !== plan.id)]);
+      await refreshSavings();
+      void refreshBalances();
+      playChime('success');
+      showToast('Plan created', `"${plan.name}" is ready.`);
+      return true;
+    } catch (err) {
+      showToast(
+        'Could not create plan',
+        err instanceof ApiError ? err.message : 'Savings plans unavailable right now.',
+        'warning'
+      );
+      return false;
     }
-    setFlexibleSavings(prev => prev - amount);
-    setPersonalBalance(prev => prev + amount);
+  };
 
-    const t = getFormattedTime();
-    const refCode = `XTR-${Math.floor(10000000 + Math.random() * 90000000)}`;
-    const newTx: Transaction = {
-      id: `tx-${Date.now()}`,
-      title: 'Flexible Savings Withdrawal',
-      subtitle: `To Personal Wallet • ${t.slice(0, 5)}`,
-      date: 'Today - 11 Sep 2026',
-      timestamp: t.slice(0, 5),
-      fullTime: t,
-      amount,
-      type: 'credit',
-      status: 'Settled',
-      category: 'savings',
-      reference: refCode,
-      note: 'Instant liquidity transfer to personal wallet',
-    };
+  const toggleStrictAutoSave = async (enabled: boolean, percentage?: number) => {
+    setStrictAutoSave(enabled);
+    try {
+      const summary = await apiStrictAutosave(enabled, percentage);
+      applySavingsSummary(mapApiSavingsSummary(summary));
+      showToast(
+        'Auto-Save Rule',
+        enabled ? 'Spend & save auto-route armed.' : 'Auto-save paused.'
+      );
+    } catch (err) {
+      showToast(
+        'Auto-save failed',
+        err instanceof ApiError ? err.message : 'Could not update auto-save.',
+        'warning'
+      );
+      void refreshSavings();
+    }
+  };
 
-    setTransactions(prev => [newTx, ...prev]);
-    playChime('success');
-    showToast('Withdrawal Complete', `+₦${amount.toLocaleString()} returned to Personal Wallet`);
+  const quickSave = async (amount: number): Promise<boolean> => {
+    try {
+      const summary = await apiFlexibleDeposit({ amount });
+      applySavingsSummary(mapApiSavingsSummary(summary));
+      void refreshBalances();
+      playChime('success');
+      showToast('Quick Save Confirmed', `+₦${amount.toLocaleString()} moved to Flexible Savings`);
+      return true;
+    } catch (err) {
+      showToast(
+        'Deposit failed',
+        err instanceof ApiError ? err.message : 'Could not deposit to savings.',
+        'warning'
+      );
+      return false;
+    }
+  };
+
+  const withdrawFlexible = async (amount: number): Promise<boolean> => {
+    try {
+      const summary = await apiFlexibleWithdraw({ amount });
+      applySavingsSummary(mapApiSavingsSummary(summary));
+      void refreshBalances();
+      playChime('success');
+      showToast('Withdrawal Complete', `+₦${amount.toLocaleString()} returned to Personal Wallet`);
+      return true;
+    } catch (err) {
+      showToast(
+        'Withdrawal failed',
+        err instanceof ApiError ? err.message : 'Could not withdraw from savings.',
+        'warning'
+      );
+      return false;
+    }
   };
 
   // Simulate real-time inbound payment
@@ -1137,8 +1256,10 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
           `₦${amount.toLocaleString()} overdraft facility submitted.`
         );
       } else {
-        const req = await apiRequestLoan({ amount, tenor, pin });
-        setMoneyRequests(prev => [req, ...prev.filter(r => r.id !== req.id)]);
+        const res = await apiRequestLoan({ amount, tenor, pin });
+        if (res.kind === 'request') {
+          setMoneyRequests(prev => [res.request, ...prev.filter(r => r.id !== res.request.id)]);
+        }
         void refreshBalances();
         playChime('success');
         showToast('Loan requested', `₦${amount.toLocaleString()} loan request submitted.`);
@@ -1425,6 +1546,9 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
       value={{
         activeScreen,
         setActiveScreen,
+        payBillsCategory,
+        openPayBills,
+        clearPayBillsCategory,
         navigateBack,
         accountContext,
         setAccountContext,
@@ -1440,6 +1564,10 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
         businessBalance,
         flexibleSavings,
         strictSavings,
+        savingsPlans,
+        savingsMeta,
+        refreshSavings,
+        createSavingsPlan,
         dailySpent,
         dailyLimit,
         cardFrozen,
@@ -1448,6 +1576,7 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
         setBiometricsActive,
         strictAutoSave,
         setStrictAutoSave,
+        toggleStrictAutoSave,
         balanceHidden,
         setBalanceHidden,
         accountTier,
@@ -1464,6 +1593,9 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
         login,
         establishSession,
         logout,
+        posManagementUnlocked,
+        unlockPosManagement,
+        lockPosManagement,
         transactions,
         beneficiaries,
         activeTransfer,
