@@ -7,25 +7,38 @@ export const ReceiveScreen: React.FC = () => {
     accountContext,
     setAccountContext,
     wallets,
+    selectedWallet,
     accountFullName,
     accountTier,
     setIsQrOpen,
     setIsShareOpen,
     setActiveScreen,
     showToast,
+    refreshBalances,
   } = useTransactions();
 
   const [activeTab, setActiveTab] = useState<'personal' | 'business'>(accountContext);
+  const [syncing, setSyncing] = useState(false);
 
   const accountInfo = useMemo(() => {
-    const wallet =
+    const byKind =
       wallets.find(w => w.kind === activeTab) ??
+      (selectedWallet.kind === activeTab ||
+      (activeTab === 'personal' && selectedWallet.kind === 'sub_personal') ||
+      (activeTab === 'business' && selectedWallet.kind === 'sub_business')
+        ? selectedWallet
+        : undefined) ??
       wallets.find(w =>
         activeTab === 'personal' ? w.kind === 'sub_personal' : w.kind === 'sub_business'
       );
 
-    const number = wallet?.accountNumber?.trim() || '—';
-    const bank = wallet?.bankName?.trim() || '—';
+    const wallet = byKind;
+    const rawNumber = wallet?.accountNumber?.trim() || '';
+    const number =
+      !rawNumber || rawNumber === '—' || rawNumber === 'undefined' || rawNumber === 'null'
+        ? ''
+        : rawNumber;
+    const bank = wallet?.bankName?.trim() || '';
     const name =
       wallet?.accountName?.trim() ||
       accountFullName.trim() ||
@@ -33,17 +46,18 @@ export const ReceiveScreen: React.FC = () => {
       '—';
     const ussd =
       wallet?.ussd?.trim() ||
-      (number !== '—' ? `*901*000*${number}#` : '—');
+      (number ? `*901*000*${number}#` : '');
 
     return {
       name,
-      number,
-      bank,
+      number: number || '—',
+      bank: bank || '—',
       tier: accountTier || 'Tier 1',
-      ussd,
+      ussd: ussd || '—',
       badge: activeTab === 'personal' ? 'Personal account' : 'Business vault',
+      provisioning: !number,
     };
-  }, [activeTab, wallets, accountFullName, accountTier]);
+  }, [activeTab, wallets, selectedWallet, accountFullName, accountTier]);
 
   const copyField = (val: string, label: string) => {
     if (!val || val === '—') {
@@ -56,13 +70,19 @@ export const ReceiveScreen: React.FC = () => {
     showToast(`${label} Copied`, `${val} copied to clipboard.`);
   };
 
-  const handleSync = (e: React.MouseEvent<HTMLButtonElement>) => {
+  const handleSync = async (e: React.MouseEvent<HTMLButtonElement>) => {
     const btn = e.currentTarget;
     btn.classList.add('animate-spin');
-    setTimeout(() => {
+    setSyncing(true);
+    try {
+      await refreshBalances();
+      showToast('Account refreshed', 'Latest wallet and virtual account details loaded.', 'success');
+    } catch {
+      showToast('Refresh failed', 'Could not reload account details.', 'warning');
+    } finally {
+      setSyncing(false);
       btn.classList.remove('animate-spin');
-      showToast('NIBSS Core Synchronized', 'Real-time settlement pipe refreshed.');
-    }, 700);
+    }
   };
 
   return (
@@ -105,8 +125,9 @@ export const ReceiveScreen: React.FC = () => {
           <div className="flex items-center gap-1.5">
             <button
               type="button"
-              onClick={handleSync}
-              className="frosted-pad !h-9 !w-9 !min-h-9 !min-w-9 !rounded-full text-[var(--muted)]"
+              disabled={syncing}
+              onClick={e => void handleSync(e)}
+              className="frosted-pad !h-9 !w-9 !min-h-9 !min-w-9 !rounded-full text-[var(--muted)] disabled:opacity-50"
               title="Sync settlement"
               aria-label="Sync"
             >
@@ -185,6 +206,11 @@ export const ReceiveScreen: React.FC = () => {
               <p className="font-mono text-[17px] font-semibold tracking-wide text-[var(--text)]">
                 {accountInfo.number}
               </p>
+              {accountInfo.provisioning && (
+                <p className="mt-0.5 text-[11px] text-[var(--muted)]">
+                  Virtual account provisioning… pull to refresh or tap sync.
+                </p>
+              )}
             </div>
             <button
               type="button"

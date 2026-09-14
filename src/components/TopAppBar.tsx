@@ -45,6 +45,7 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
     selectWallet,
     personalBalance,
     businessBalance,
+    unreadNotificationCount,
   } = useTransactions();
 
   const isLight = theme === 'light';
@@ -87,6 +88,7 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
     activeScreen === 'limits' ||
     activeScreen === 'support' ||
     activeScreen === 'network' ||
+    activeScreen === 'notifications' ||
     activeScreen === 'utility' ||
     activeScreen === 'history' ||
     activeScreen === 'statement' ||
@@ -115,6 +117,7 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
       else if (activeScreen === 'limits') screenTitle = 'Limit settings';
       else if (activeScreen === 'support') screenTitle = 'Support';
       else if (activeScreen === 'network') screenTitle = 'Network';
+      else if (activeScreen === 'notifications') screenTitle = 'Notifications';
       else if (activeScreen === 'utility') screenTitle = 'Utilities & Analytics';
       else if (activeScreen === 'history') screenTitle = 'Transaction History';
       else if (activeScreen === 'statement') screenTitle = 'Statements';
@@ -243,12 +246,14 @@ export const TopAppBar: React.FC<TopAppBarProps> = ({ title, showBack }) => {
 
             <button
               aria-label="Notifications"
-              onClick={() => setActiveScreen('history')}
+              onClick={() => setActiveScreen('notifications')}
               className={`frosted-pad !h-8 !w-8 !min-h-8 !min-w-8 !rounded-lg relative cursor-pointer ${iconTone}`}
               type="button"
             >
               <Icon name="notifications" size={18} />
-              <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-[#4edea3] ring-2 ring-[var(--bg-0)]" />
+              {unreadNotificationCount > 0 && (
+                <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-[#4edea3] ring-2 ring-[var(--bg-0)]" />
+              )}
             </button>
 
             <button

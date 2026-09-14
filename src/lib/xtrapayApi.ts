@@ -388,6 +388,16 @@ export type ApiWallet = ApiBootstrap['wallets'][number] & {
   status?: string | null;
   createdAt?: string | null;
   created_at?: string | null;
+  account_number?: string | null;
+  bank_name?: string | null;
+  account_name?: string | null;
+  nuban?: string | null;
+  vaNumber?: string | null;
+  va_number?: string | null;
+  payIn?: Record<string, unknown> | null;
+  pay_in?: Record<string, unknown> | null;
+  virtualAccount?: Record<string, unknown> | null;
+  virtual_account?: Record<string, unknown> | null;
 };
 
 export type CreateSubAccountPayload = {
@@ -481,8 +491,9 @@ export async function apiBusinessAccounts() {
 }
 
 export function mapApiWallet(w: ApiWallet): WalletAccount {
-  const kind = (w.kind || 'personal') as WalletAccount['kind'];
-  const purpose = w.purpose ? String(w.purpose) : undefined;
+  const raw = w as ApiWallet & Record<string, unknown>;
+  const kind = (raw.kind || 'personal') as WalletAccount['kind'];
+  const purpose = raw.purpose ? String(raw.purpose) : undefined;
   const defaultSubtitle =
     kind === 'sub_business'
       ? 'Sub-account · Mini business'
@@ -491,16 +502,54 @@ export function mapApiWallet(w: ApiWallet): WalletAccount {
         : kind === 'business'
           ? 'Main business'
           : 'Main wallet';
+
+  // Nested pay-in / VA objects some backends return
+  const payIn =
+    (raw.payIn as Record<string, unknown> | undefined) ||
+    (raw.pay_in as Record<string, unknown> | undefined) ||
+    (raw.virtualAccount as Record<string, unknown> | undefined) ||
+    (raw.virtual_account as Record<string, unknown> | undefined) ||
+    null;
+
+  const accountNumber = String(
+    raw.accountNumber ??
+      raw.account_number ??
+      raw.nuban ??
+      raw.vaNumber ??
+      raw.va_number ??
+      payIn?.accountNumber ??
+      payIn?.account_number ??
+      payIn?.nuban ??
+      ''
+  ).trim();
+
+  const bankName = String(
+    raw.bankName ??
+      raw.bank_name ??
+      payIn?.bankName ??
+      payIn?.bank_name ??
+      ''
+  ).trim();
+
+  const accountNameRaw =
+    raw.accountName ??
+    raw.account_name ??
+    payIn?.accountName ??
+    payIn?.account_name;
+  const ussdRaw = raw.ussd ?? payIn?.ussd;
+
   return {
-    id: String(w.id),
-    name: String(w.name),
+    id: String(raw.id),
+    name: String(raw.name || 'Wallet'),
     kind,
-    accountNumber: String(w.accountNumber),
-    bankName: String(w.bankName),
-    balance: Number(w.balance ?? 0),
-    subtitle: purpose || String(w.subtitle || defaultSubtitle),
-    accountName: w.accountName,
-    ussd: w.ussd,
+    accountNumber: accountNumber && accountNumber !== 'undefined' && accountNumber !== 'null'
+      ? accountNumber
+      : '',
+    bankName: bankName && bankName !== 'undefined' && bankName !== 'null' ? bankName : '',
+    balance: Number(raw.balance ?? 0),
+    subtitle: purpose || String(raw.subtitle || defaultSubtitle),
+    accountName: accountNameRaw ? String(accountNameRaw) : undefined,
+    ussd: ussdRaw ? String(ussdRaw) : undefined,
   };
 }
 
@@ -569,8 +618,11 @@ export type ApiTransferResult = {
 
 export async function apiCreateTransfer(payload: {
   walletId?: string;
-  accountNumber: string;
-  bankName: string;
+  /** bank = NUBAN; wallet = Xtrapay phone / tag */
+  channel?: 'bank' | 'wallet';
+  accountNumber?: string;
+  phone?: string;
+  bankName?: string;
   bankCode?: string;
   amount: number;
   recipientName: string;
@@ -579,7 +631,10 @@ export async function apiCreateTransfer(payload: {
 }) {
   return apiRequest<ApiTransferResult>('/transfers', {
     method: 'POST',
-    body: JSON.stringify(payload),
+    body: JSON.stringify({
+      ...payload,
+      channel: payload.channel || 'bank',
+    }),
   });
 }
 
@@ -1842,12 +1897,32 @@ export async function apiDeclinePot(id: string) {
 export async function apiLookupUserByPhone(phone: string) {
   const normalized = phone.replace(/\s+/g, '');
   const q = new URLSearchParams({ phone: normalized });
-  return apiRequest<{
-    found: boolean;
-    fullName?: string | null;
-    phone?: string;
-    hasWallet?: boolean;
-  }>(`/users/lookup?${q}`);
+  try {
+    return await apiRequest<{
+      found: boolean;
+      fullName?: string | null;
+      name?: string | null;
+      phone?: string;
+      hasWallet?: boolean;
+      walletId?: string | null;
+    }>(`/users/lookup?${q}`);
+  } catch (err) {
+    // Alias some stacks use for wallet name enquiry
+    if (err instanceof ApiError && (err.status === 404 || err.status === 405)) {
+      return apiRequest<{
+        found: boolean;
+        fullName?: string | null;
+        name?: string | null;
+        phone?: string;
+        hasWallet?: boolean;
+        walletId?: string | null;
+      }>('/transfers/wallet-enquiry', {
+        method: 'POST',
+        body: JSON.stringify({ phone: normalized }),
+      });
+    }
+    throw err;
+  }
 }
 
 /* ── Nearby pay ── */
@@ -1946,6 +2021,107 @@ export async function apiLogout() {
   } finally {
     setAccessToken(null);
   }
+}
+
+/* ── In-app notifications (credits / top-ups / alerts) ── */
+
+export type ApiAppNotification = {
+  id: string;
+  type?: string;
+  kind?: string;
+  title?: string;
+  body?: string;
+  message?: string;
+  amount?: number | null;
+  currency?: string | null;
+  walletId?: string | null;
+  wallet_id?: string | null;
+  reference?: string | null;
+  read?: boolean;
+  createdAt?: string;
+  created_at?: string;
+};
+
+export type AppNotification = {
+  id: string;
+  type: string;
+  title: string;
+  body: string;
+  amount: number | null;
+  walletId: string | null;
+  reference: string | null;
+  read: boolean;
+  createdAt: string;
+};
+
+/** Credit / VA / wallet top-up style alerts that should chime + refresh balances. */
+export function isCreditTopUpNotification(n: Pick<AppNotification, 'type' | 'title' | 'body'>): boolean {
+  const t = `${n.type} ${n.title} ${n.body}`.toLowerCase();
+  return (
+    t.includes('credit') ||
+    t.includes('topup') ||
+    t.includes('top-up') ||
+    t.includes('top up') ||
+    t.includes('inward') ||
+    t.includes('incoming') ||
+    t.includes('deposit') ||
+    t.includes('received') ||
+    t.includes('funding') ||
+    t.includes('va_credit') ||
+    t.includes('wallet_credit')
+  );
+}
+
+export function mapApiNotification(raw: ApiAppNotification): AppNotification {
+  return {
+    id: String(raw.id),
+    type: String(raw.type || raw.kind || 'alert'),
+    title: String(raw.title || 'Notification'),
+    body: String(raw.body || raw.message || ''),
+    amount:
+      raw.amount != null && Number.isFinite(Number(raw.amount)) ? Number(raw.amount) : null,
+    walletId: raw.walletId != null || raw.wallet_id != null
+      ? String(raw.walletId ?? raw.wallet_id)
+      : null,
+    reference: raw.reference != null ? String(raw.reference) : null,
+    read: Boolean(raw.read),
+    createdAt: String(raw.createdAt ?? raw.created_at ?? ''),
+  };
+}
+
+/**
+ * GET /notifications — inbox for the signed-in user.
+ * Query: unreadOnly=1, since=<iso|id>, limit=
+ */
+export async function apiNotifications(params?: {
+  unreadOnly?: boolean;
+  since?: string;
+  limit?: number;
+}) {
+  const q = new URLSearchParams();
+  if (params?.unreadOnly) q.set('unreadOnly', '1');
+  if (params?.since) q.set('since', params.since);
+  if (params?.limit) q.set('limit', String(params.limit));
+  const suffix = q.toString() ? `?${q}` : '';
+  const data = await apiRequest<
+    ApiAppNotification[] | { notifications: ApiAppNotification[]; unreadCount?: number }
+  >(`/notifications${suffix}`);
+  const list = Array.isArray(data) ? data : data?.notifications ?? [];
+  const unreadCount = Array.isArray(data)
+    ? list.filter(n => !n.read).length
+    : Number((data as { unreadCount?: number }).unreadCount ?? list.filter(n => !n.read).length);
+  return {
+    items: list.map(mapApiNotification),
+    unreadCount,
+  };
+}
+
+export async function apiMarkNotificationRead(id: string) {
+  return apiRequest<{ ok?: boolean }>(`/notifications/${id}/read`, { method: 'POST' });
+}
+
+export async function apiMarkAllNotificationsRead() {
+  return apiRequest<{ ok?: boolean }>('/notifications/read-all', { method: 'POST' });
 }
 
 /** Public legal docs — Terms / Privacy (CMS-backed). */

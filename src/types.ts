@@ -27,7 +27,8 @@ export type ScreenType =
   | 'loans'
   | 'limits'
   | 'support'
-  | 'network';
+  | 'network'
+  | 'notifications';
 
 export type AccountContext = 'personal' | 'business';
 

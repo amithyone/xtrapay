@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useTransactions } from '../../context/TransactionContext';
 import type { Beneficiary } from '../../types';
 import { ApiError } from '../../lib/api';
-import { apiNameEnquiry } from '../../lib/xtrapayApi';
+import { apiLookupUserByPhone, apiNameEnquiry } from '../../lib/xtrapayApi';
 import { Icon } from '../Icon';
 import { PinSheetModal } from '../common/PinSheetModal';
 
@@ -30,9 +30,10 @@ export const TransferScreen: React.FC = () => {
   const [channel, setChannel] = useState<'bank' | 'wallet'>('bank');
   const [debitWalletId, setDebitWalletId] = useState(selectedWalletId);
   const [accountNumber, setAccountNumber] = useState<string>('');
+  const [phoneNumber, setPhoneNumber] = useState<string>('');
   const [selectedBank, setSelectedBank] = useState<string>('Access Bank');
-  const [amountStr, setAmountStr] = useState<string>('50,000');
-  const [narration, setNarration] = useState<string>('Project Milestone 2 Settlement');
+  const [amountStr, setAmountStr] = useState<string>('');
+  const [narration, setNarration] = useState<string>('');
   const [recipientName, setRecipientName] = useState<string>('');
   const [nameLoading, setNameLoading] = useState(false);
   const [debitModalOpen, setDebitModalOpen] = useState(false);
@@ -43,6 +44,8 @@ export const TransferScreen: React.FC = () => {
   /** Skip auto name-enquiry for this acct|bank after one failure until the user changes either value. */
   const failedNameEnquiryKey = useRef<string | null>(null);
   const succeededNameEnquiryKey = useRef<string | null>(null);
+  const failedWalletLookupKey = useRef<string | null>(null);
+  const succeededWalletLookupKey = useRef<string | null>(null);
 
   // Always default debit account to the account currently in view
   useEffect(() => {
@@ -140,6 +143,63 @@ export const TransferScreen: React.FC = () => {
     };
   }, [accountNumber, selectedBankMeta, channel, showToast]);
 
+  // Wallet → wallet: confirm holder name from phone via GET /users/lookup
+  useEffect(() => {
+    if (channel !== 'wallet') return;
+
+    const phone = phoneNumber.replace(/\D/g, '');
+    if (phone.length < 10) {
+      return;
+    }
+
+    if (failedWalletLookupKey.current === phone) return;
+    if (succeededWalletLookupKey.current === phone) return;
+
+    const seq = ++nameEnquirySeq.current;
+    setNameLoading(true);
+    setRecipientName('');
+
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const result = await apiLookupUserByPhone(phone);
+          if (seq !== nameEnquirySeq.current) return;
+          const name = String(result.fullName || result.name || '').trim();
+          if (!result.found || !name) {
+            failedWalletLookupKey.current = phone;
+            succeededWalletLookupKey.current = null;
+            setRecipientName('');
+            showToast(
+              'Wallet not found',
+              'No Xtrapay account matches that phone number.',
+              'warning'
+            );
+            return;
+          }
+          failedWalletLookupKey.current = null;
+          succeededWalletLookupKey.current = phone;
+          setRecipientName(name.toUpperCase());
+        } catch (err) {
+          if (seq !== nameEnquirySeq.current) return;
+          failedWalletLookupKey.current = phone;
+          succeededWalletLookupKey.current = null;
+          setRecipientName('');
+          showToast(
+            'Lookup failed',
+            err instanceof ApiError ? err.message : 'Could not confirm wallet holder.',
+            'warning'
+          );
+        } finally {
+          if (seq === nameEnquirySeq.current) setNameLoading(false);
+        }
+      })();
+    }, 350);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [phoneNumber, channel, showToast]);
+
   const debitWallet = useMemo(
     () => wallets.find(w => w.id === debitWalletId) ?? selectedWallet,
     [wallets, debitWalletId, selectedWallet]
@@ -232,16 +292,22 @@ export const TransferScreen: React.FC = () => {
       showToast('Invalid account', 'Enter a valid 10-digit account number.', 'warning');
       return;
     }
+    if (channel === 'wallet' && phoneNumber.replace(/\D/g, '').length < 10) {
+      showToast('Phone required', 'Enter the recipient’s Xtrapay phone number.', 'warning');
+      return;
+    }
     if (channel === 'bank' && !selectedBank.trim()) {
       showToast('Select bank', 'Choose a destination bank to continue.', 'warning');
       return;
     }
-    if (channel === 'bank' && (nameLoading || !recipientName.trim())) {
+    if (nameLoading || !recipientName.trim()) {
       showToast(
-        'Name enquiry required',
+        channel === 'wallet' ? 'Confirm wallet holder' : 'Name enquiry required',
         nameLoading
           ? 'Wait for the account name to resolve.'
-          : 'Account name could not be verified yet.',
+          : channel === 'wallet'
+            ? 'Phone number could not be matched to an Xtrapay user yet.'
+            : 'Account name could not be verified yet.',
         'warning'
       );
       return;
@@ -255,9 +321,11 @@ export const TransferScreen: React.FC = () => {
     void initiateTransfer({
       amount: numericAmount,
       recipientName: recipientName || 'BENEFICIARY RECIPIENT',
-      bankName: selectedBank,
-      bankCode: selectedBankMeta?.code,
-      accountNumber,
+      bankName: channel === 'wallet' ? 'Xtrapay Wallet' : selectedBank,
+      bankCode: channel === 'bank' ? selectedBankMeta?.code : undefined,
+      accountNumber: channel === 'bank' ? accountNumber : undefined,
+      phone: channel === 'wallet' ? phoneNumber.replace(/\D/g, '') : undefined,
+      channel,
       narration: narration || `From ${debitWallet.name}`,
       pin,
       walletId: debitWalletId,
@@ -273,7 +341,12 @@ export const TransferScreen: React.FC = () => {
         <div className="glass-card glass-strong flex p-1 !rounded-[18px]">
           <button
             type="button"
-            onClick={() => setChannel('bank')}
+            onClick={() => {
+              setChannel('bank');
+              nameEnquirySeq.current += 1;
+              setRecipientName('');
+              setNameLoading(false);
+            }}
             className={`settings-row flex-1 py-2.5 rounded-[14px] text-[12px] font-semibold flex items-center justify-center gap-2 appearance-none border-0 cursor-pointer ${
               channel === 'bank'
                 ? 'bg-[var(--accent)] text-white shadow-sm'
@@ -285,7 +358,14 @@ export const TransferScreen: React.FC = () => {
           </button>
           <button
             type="button"
-            onClick={() => setChannel('wallet')}
+            onClick={() => {
+              setChannel('wallet');
+              nameEnquirySeq.current += 1;
+              setRecipientName('');
+              setNameLoading(false);
+              failedWalletLookupKey.current = null;
+              succeededWalletLookupKey.current = null;
+            }}
             className={`settings-row flex-1 py-2.5 rounded-[14px] text-[12px] font-semibold flex items-center justify-center gap-2 appearance-none border-0 cursor-pointer ${
               channel === 'wallet'
                 ? 'bg-[var(--accent)] text-white shadow-sm'
@@ -353,49 +433,82 @@ export const TransferScreen: React.FC = () => {
           <Icon name="expand_more" size={18} className="text-[var(--muted)] shrink-0" />
         </button>
         <p className="text-[11px] text-[var(--muted)] -mt-1.5 px-0.5">
-          Debit from · {debitWallet.accountNumber} · Bal{' '}
+          Debit from ·{' '}
+          {debitWallet.accountNumber?.trim()
+            ? debitWallet.accountNumber
+            : 'VA provisioning…'}{' '}
+          · Bal{' '}
           <span className="font-mono font-semibold text-[var(--text)]">{money(debitBalance)}</span>
         </p>
 
-        <div className="flex items-center gap-2">
-          <input
-            className={`${fieldClass} font-mono flex-1`}
-            inputMode="numeric"
-            maxLength={10}
-            value={accountNumber}
-            onChange={e => {
-              const val = e.target.value.replace(/\D/g, '');
-              setAccountNumber(val);
-              if (val.length !== 10) {
-                nameEnquirySeq.current += 1;
-                setNameLoading(false);
-                setRecipientName('');
-              }
-            }}
-            placeholder="Account number"
-            aria-label="Account number"
-            type="text"
-          />
-          <button
-            type="button"
-            aria-label="Beneficiaries"
-            onClick={() => {
-              if (recentRecipients[0]) {
-                handleSelectBeneficiary(recentRecipients[0]);
-              } else {
-                showToast(
-                  'No recent recipients',
-                  'Complete a transfer and they will show up here.',
-                  'info'
-                );
-              }
-            }}
-            className="frosted-pad !h-12 !w-12 !min-h-12 !min-w-12 !rounded-2xl text-[var(--accent)] shrink-0"
-            title="Quick beneficiary"
-          >
-            <Icon name="contacts" size={18} />
-          </button>
-        </div>
+        {channel === 'wallet' ? (
+          <div className="space-y-1.5">
+            <input
+              className={`${fieldClass} font-mono`}
+              inputMode="tel"
+              maxLength={14}
+              value={phoneNumber}
+              onChange={e => {
+                const val = e.target.value.replace(/[^\d+]/g, '');
+                setPhoneNumber(val);
+                const digits = val.replace(/\D/g, '');
+                if (digits.length < 10) {
+                  nameEnquirySeq.current += 1;
+                  setNameLoading(false);
+                  setRecipientName('');
+                  failedWalletLookupKey.current = null;
+                  succeededWalletLookupKey.current = null;
+                }
+              }}
+              placeholder="Recipient phone (e.g. 0803…)"
+              aria-label="Recipient phone"
+              type="tel"
+            />
+            <p className="text-[11px] text-[var(--muted)] px-0.5">
+              We’ll confirm the Xtrapay account holder’s name before you pay.
+            </p>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            <input
+              className={`${fieldClass} font-mono flex-1`}
+              inputMode="numeric"
+              maxLength={10}
+              value={accountNumber}
+              onChange={e => {
+                const val = e.target.value.replace(/\D/g, '');
+                setAccountNumber(val);
+                if (val.length !== 10) {
+                  nameEnquirySeq.current += 1;
+                  setNameLoading(false);
+                  setRecipientName('');
+                }
+              }}
+              placeholder="Account number"
+              aria-label="Account number"
+              type="text"
+            />
+            <button
+              type="button"
+              aria-label="Beneficiaries"
+              onClick={() => {
+                if (recentRecipients[0]) {
+                  handleSelectBeneficiary(recentRecipients[0]);
+                } else {
+                  showToast(
+                    'No recent recipients',
+                    'Complete a transfer and they will show up here.',
+                    'info'
+                  );
+                }
+              }}
+              className="frosted-pad !h-12 !w-12 !min-h-12 !min-w-12 !rounded-2xl text-[var(--accent)] shrink-0"
+              title="Quick beneficiary"
+            >
+              <Icon name="contacts" size={18} />
+            </button>
+          </div>
+        )}
 
         {channel === 'bank' && (
           <button
@@ -417,7 +530,9 @@ export const TransferScreen: React.FC = () => {
         {nameLoading && (
           <div className="rounded-2xl border border-[var(--glass-border)] bg-black/[0.03] dark:bg-white/[0.04] px-3.5 py-2.5 flex items-center gap-2">
             <Icon name="sync" size={16} className="text-[var(--accent)] shrink-0 animate-spin" />
-            <p className="text-[12px] text-[var(--muted)]">Resolving account name…</p>
+            <p className="text-[12px] text-[var(--muted)]">
+              {channel === 'wallet' ? 'Confirming wallet holder…' : 'Resolving account name…'}
+            </p>
           </div>
         )}
 
@@ -426,7 +541,7 @@ export const TransferScreen: React.FC = () => {
             <Icon name="verified" size={16} className="text-emerald-500 shrink-0" />
             <div className="min-w-0">
               <p className="text-[10px] uppercase tracking-[0.16em] text-emerald-600/80 dark:text-emerald-400/80">
-                Name enquiry
+                {channel === 'wallet' ? 'Wallet holder' : 'Name enquiry'}
               </p>
               <p className="text-[13px] font-semibold text-[var(--text)] truncate">{recipientName}</p>
             </div>

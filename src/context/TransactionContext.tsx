@@ -43,6 +43,8 @@ import {
   apiLogout,
   apiMe,
   apiMoneyRequests,
+  apiNotifications,
+  isCreditTopUpNotification,
   apiPots,
   apiProximityPay,
   apiRequestLoan,
@@ -60,6 +62,7 @@ import {
   mapApiWallets,
   KYC_CUMULATIVE_THRESHOLD_NGN,
   type ApiBank,
+  type AppNotification,
   type UserProfile,
 } from '../lib/xtrapayApi';
 
@@ -199,6 +202,11 @@ interface TransactionContextType {
   posManagementUnlocked: boolean;
   unlockPosManagement: (pin: string) => Promise<boolean>;
   lockPosManagement: () => void;
+  /** In-app alerts (top-ups / credits) from GET /notifications */
+  notifications: AppNotification[];
+  unreadNotificationCount: number;
+  setUnreadNotificationCount: React.Dispatch<React.SetStateAction<number>>;
+  refreshNotifications: () => Promise<void>;
   
   // Real-time Transactions
   transactions: Transaction[];
@@ -209,7 +217,9 @@ interface TransactionContextType {
     recipientName: string;
     bankName: string;
     bankCode?: string;
-    accountNumber: string;
+    accountNumber?: string;
+    phone?: string;
+    channel?: 'bank' | 'wallet';
     narration?: string;
     pin: string;
     walletId?: string;
@@ -405,6 +415,9 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
   const [dailyLimit, setDailyLimit] = useState<number>(5000000);
   const [cumulativeSpent, setCumulativeSpent] = useState<number>(0);
   const [kycPromptDismissed, setKycPromptDismissed] = useState(false);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
+  const seenNotificationIds = React.useRef<Set<string>>(new Set());
   
   const [cardFrozen, setCardFrozen] = useState<boolean>(false);
   const [biometricsActive, setBiometricsActive] = useState<boolean>(true);
@@ -632,6 +645,9 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
     setGroupPots([]);
     setCumulativeSpent(0);
     setKycPromptDismissed(false);
+    setNotifications([]);
+    setUnreadNotificationCount(0);
+    seenNotificationIds.current = new Set();
     setActiveScreenState('hub');
     setScreenHistory(['hub']);
     try {
@@ -702,6 +718,84 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
   };
 
   const lockPosManagement = () => setPosManagementUnlocked(false);
+
+  const refreshNotifications = async () => {
+    try {
+      const res = await apiNotifications({ limit: 40 });
+      setNotifications(res.items);
+      setUnreadNotificationCount(res.unreadCount);
+      for (const n of res.items) {
+        seenNotificationIds.current.add(n.id);
+      }
+    } catch {
+      // endpoint may not exist yet
+    }
+  };
+
+  /** Soft poll for credit / top-up alerts while signed in. */
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    let cancelled = false;
+
+    const poll = async (announceNew: boolean) => {
+      try {
+        const res = await apiNotifications({ limit: 40 });
+        if (cancelled) return;
+
+        const freshCredits: AppNotification[] = [];
+        for (const n of res.items) {
+          if (!seenNotificationIds.current.has(n.id)) {
+            seenNotificationIds.current.add(n.id);
+            if (announceNew && !n.read && isCreditTopUpNotification(n)) {
+              freshCredits.push(n);
+            }
+          }
+        }
+
+        setNotifications(res.items);
+        setUnreadNotificationCount(res.unreadCount);
+
+        if (freshCredits.length) {
+          void refreshBalances();
+          for (const n of freshCredits) {
+            const amountLabel =
+              n.amount != null
+                ? `₦${n.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                : null;
+            playChime('success');
+            showToast(
+              n.title || 'Money received',
+              amountLabel
+                ? `${amountLabel} credited${n.body ? ` · ${n.body}` : ''}`
+                : n.body || 'Your wallet was topped up.',
+              'success'
+            );
+          }
+        }
+      } catch {
+        // silent — backend may still be wiring /notifications
+      }
+    };
+
+    // First load: seed seen IDs without toast spam
+    void poll(false);
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void poll(true);
+    }, 12_000);
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void poll(true);
+    };
+    document.addEventListener('visibilitychange', onVisible);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- poll helpers are stable enough for session lifetime
+  }, [isAuthenticated]);
 
   useEffect(() => {
     void apiAppConfig()
@@ -897,6 +991,8 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
     bankName,
     bankCode,
     accountNumber,
+    phone,
+    channel = 'bank',
     narration,
     pin,
     walletId,
@@ -905,20 +1001,24 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
     recipientName: string;
     bankName: string;
     bankCode?: string;
-    accountNumber: string;
+    accountNumber?: string;
+    phone?: string;
+    channel?: 'bank' | 'wallet';
     narration?: string;
     pin: string;
     walletId?: string;
   }) => {
     const t1 = getFormattedTime();
     const pendingRef = `XTR-PENDING-${Date.now()}`;
+    const displayAccount =
+      channel === 'wallet' ? phone || accountNumber || '' : accountNumber || '';
 
     setActiveTransfer({
       step: 1,
       amount,
       recipientName,
-      bankName,
-      accountNumber,
+      bankName: channel === 'wallet' ? bankName || 'Xtrapay Wallet' : bankName,
+      accountNumber: displayAccount,
       reference: pendingRef,
       narration: narration || 'Instant Funds Transfer',
       initTime: t1,
@@ -935,8 +1035,10 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
 
       const result = await apiCreateTransfer({
         walletId: walletId || selectedWalletId,
-        accountNumber,
-        bankName,
+        channel,
+        accountNumber: channel === 'bank' ? accountNumber : undefined,
+        phone: channel === 'wallet' ? phone || accountNumber : undefined,
+        bankName: channel === 'wallet' ? bankName || 'Xtrapay Wallet' : bankName,
         bankCode,
         amount,
         recipientName,
@@ -1701,6 +1803,10 @@ export const TransactionProvider: React.FC<{ children: ReactNode }> = ({ childre
         posManagementUnlocked,
         unlockPosManagement,
         lockPosManagement,
+        notifications,
+        unreadNotificationCount,
+        setUnreadNotificationCount,
+        refreshNotifications,
         transactions,
         beneficiaries,
         activeTransfer,

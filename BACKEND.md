@@ -107,8 +107,8 @@ WalletAccount {
   id: string
   name: string
   kind: 'personal' | 'business' | 'sub_personal' | 'sub_business'
-  accountNumber: string          // NUBAN / VA
-  bankName: string
+  accountNumber: string          // NUBAN / VA — also account_number, nuban, payIn.accountNumber
+  bankName: string               // also bank_name / payIn.bankName
   balance: number                // NGN
   subtitle: string               // often = purpose for subs
   purpose?: string
@@ -522,9 +522,11 @@ further high-value rails if needed.
 | GET | `/wallets/:id/transactions` | Ledger (`category`, `from`, `to`, cursor) |
 | GET | `/transactions` | Cross-wallet history |
 | GET | `/transactions/:id` | Receipt payload |
-| POST | `/transfers` | `{ walletId, accountNumber, bankCode, amount, narration, pinChallenge }` |
+| POST | `/transfers` | Bank: `{ walletId, channel:'bank', accountNumber, bankCode, amount, recipientName, narration, pin }`. Wallet: `{ walletId, channel:'wallet', phone, amount, recipientName, narration, pin }` |
 | GET | `/transfers/:id` | Status polling (steps 1–3) |
-| POST | `/transfers/name-enquiry` | `{ accountNumber, bankCode }` → `{ accountName }` |
+| POST | `/transfers/name-enquiry` | Bank NUBAN: `{ accountNumber, bankCode }` → `{ accountName }` |
+| GET | `/users/lookup?phone=` | Wallet holder confirm → `{ found, fullName, hasWallet?, walletId? }` |
+| POST | `/transfers/wallet-enquiry` | Optional alias: `{ phone }` → same shape |
 | GET | `/banks` | NUBAN list |
 | GET | `/beneficiaries` | Saved recipients |
 | POST | `/beneficiaries` | Save |
@@ -683,6 +685,49 @@ If the endpoint is missing or empty, the app shows a short built-in fallback.
 
 **Product attribution (UI copy):**  
 Xtrapay by **Xtratech Global Solutions** · Powered by **CheckoutNow** (licensed engine; CheckoutNow does not control user funds/data).
+
+---
+
+## 11b. Notifications (credits / top-ups)
+
+When any wallet is credited (VA top-up, NIP inflow, wallet-to-wallet receive, POS sweep into wallet, card refund, etc.), **create a notification row** for that user. The app polls every ~12s while open.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/notifications` | Inbox · query `unreadOnly=1`, `since=`, `limit=` |
+| POST | `/notifications/:id/read` | Mark one read |
+| POST | `/notifications/read-all` | Mark all read |
+
+**GET `/notifications` `200`**
+
+```json
+{
+  "unreadCount": 2,
+  "notifications": [
+    {
+      "id": "ntf_01H…",
+      "type": "wallet_credit",
+      "title": "Money received",
+      "body": "Transfer from ADEKUNLE OLUMIDE",
+      "amount": 25000,
+      "currency": "NGN",
+      "walletId": "personal",
+      "reference": "XTR-99218841",
+      "read": false,
+      "createdAt": "2026-09-14T09:12:00Z"
+    }
+  ]
+}
+```
+
+Also accepted: bare array of notifications. Snake_case: `wallet_id`, `created_at`, `unread_count`.
+
+**Recommended `type` values (toast + balance refresh when unread & new):**  
+`wallet_credit` · `va_credit` · `topup` · `inward_transfer` · `deposit` · `funding`
+
+App also treats titles/bodies containing “credit / top-up / received / deposit / inward” as credit alerts.
+
+**When to insert:** immediately after successful VA/NIP credit or any balance-increasing event. Keep unread until the user opens the inbox or marks read.
 
 ---
 

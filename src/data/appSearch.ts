@@ -328,7 +328,7 @@ export const APP_SEARCH_CATALOG: AppSearchItem[] = [
     subtitle: 'Push, SMS & email alerts',
     icon: 'notifications',
     keywords: 'notifications push sms email alerts login promo',
-    action: { type: 'screen', screen: 'profile' },
+    action: { type: 'screen', screen: 'notifications' },
   },
 ];
 
